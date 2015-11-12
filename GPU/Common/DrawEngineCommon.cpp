@@ -50,6 +50,27 @@ VertexDecoder *DrawEngineCommon::GetVertexDecoder(u32 vtype) {
 	return dec;
 }
 
+std::vector<std::string> DrawEngineCommon::DebugGetVertexLoaderIDs() {
+	std::vector<std::string> ids;
+	for (auto iter : decoderMap_) {
+		std::string id;
+		id.resize(sizeof(iter.first));
+		memcpy(&id[0], &iter.first, sizeof(iter.first));
+		ids.push_back(id);
+	}
+	return ids;
+}
+
+std::string DrawEngineCommon::DebugGetVertexLoaderString(std::string id, DebugShaderStringType stringType) {
+	u32 mapId;
+	memcpy(&mapId, &id[0], sizeof(mapId));
+	auto iter = decoderMap_.find(mapId);
+	if (iter == decoderMap_.end())
+		return "N/A";
+	else
+		return iter->second->GetString(stringType);
+}
+
 struct Plane {
 	float x, y, z, w;
 	void Set(float _x, float _y, float _z, float _w) { x = _x; y = _y; z = _z; w = _w; }
@@ -66,20 +87,19 @@ static void PlanesFromMatrix(float mtx[16], Plane planes[6]) {
 }
 
 static Vec3f ClipToScreen(const Vec4f& coords) {
-	// TODO: Check for invalid parameters (x2 < x1, etc)
-	float vpx1 = getFloat24(gstate.viewportx1);
-	float vpx2 = getFloat24(gstate.viewportx2);
-	float vpy1 = getFloat24(gstate.viewporty1);
-	float vpy2 = getFloat24(gstate.viewporty2);
-	float vpz1 = getFloat24(gstate.viewportz1);
-	float vpz2 = getFloat24(gstate.viewportz2);
+	float xScale = gstate.getViewportXScale();
+	float xCenter = gstate.getViewportXCenter();
+	float yScale = gstate.getViewportYScale();
+	float yCenter = gstate.getViewportYCenter();
+	float zScale = gstate.getViewportZScale();
+	float zCenter = gstate.getViewportZCenter();
 
-	float retx = coords.x * vpx1 / coords.w + vpx2;
-	float rety = coords.y * vpy1 / coords.w + vpy2;
-	float retz = coords.z * vpz1 / coords.w + vpz2;
+	float x = coords.x * xScale / coords.w + xCenter;
+	float y = coords.y * yScale / coords.w + yCenter;
+	float z = coords.z * zScale / coords.w + zCenter;
 
 	// 16 = 0xFFFF / 4095.9375
-	return Vec3f(retx * 16, rety * 16, retz);
+	return Vec3f(x * 16, y * 16, z);
 }
 
 static Vec3f ScreenToDrawing(const Vec3f& coords) {
@@ -88,6 +108,12 @@ static Vec3f ScreenToDrawing(const Vec3f& coords) {
 	ret.y = (coords.y - gstate.getOffsetY16()) * (1.0f / 16.0f);
 	ret.z = coords.z;
 	return ret;
+}
+
+u32 DrawEngineCommon::NormalizeVertices(u8 *outPtr, u8 *bufPtr, const u8 *inPtr, int lowerBound, int upperBound, u32 vertType) {
+	const u32 vertTypeID = (vertType & 0xFFFFFF) | (gstate.getUVGenMode() << 24);
+	VertexDecoder *dec = GetVertexDecoder(vertTypeID);
+	return DrawEngineCommon::NormalizeVertices(outPtr, bufPtr, inPtr, dec, lowerBound, upperBound, vertType);
 }
 
 // This code is HIGHLY unoptimized!

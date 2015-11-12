@@ -22,7 +22,7 @@
 #include <map>
 #include <string>
 
-#include "native/base/mutex.h"
+#include "base/mutex.h"
 
 #include "Common/CommonTypes.h"
 
@@ -173,5 +173,5 @@ private:
 	bool sawUnknownModule;
 };
 
-extern SymbolMap symbolMap;
+extern SymbolMap *g_symbolMap;
 

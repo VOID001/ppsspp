@@ -5,8 +5,10 @@ CONFIG += staticlib
 
 include(Settings.pri)
 
-INCLUDEPATH += $$P/ $$P/native $$P/Core/MIPS $$P/ext/xbrz
-!contains(DEFINES, USING_GLES2): INCLUDEPATH += $$P/native/ext/glew
+INCLUDEPATH += $$P/ $$P/ext/native $$P/Core/MIPS $$P/ext/xbrz
+!exists( /usr/include/GL/glew.h ) {
+	!contains(DEFINES, USING_GLES2): INCLUDEPATH += $$P/ext/native/ext/glew
+}
 
 arm {
 	SOURCES += $$P/Core/MIPS/ARM/*.cpp #CoreARM
@@ -15,6 +17,10 @@ arm {
 else:i86 {
 	SOURCES += $$P/Core/MIPS/x86/*.cpp
 	HEADERS += $$P/Core/MIPS/x86/*.h
+}
+else:mips {
+	SOURCES += $$P/Core/MIPS/MIPS/*.cpp
+	HEADERS += $$P/Core/MIPS/MIPS/*.h
 }
 else {
 	SOURCES += $$P/Core/MIPS/fake/*.cpp
@@ -26,6 +32,7 @@ SOURCES += $$P/Core/*.cpp \ # Core
 	$$P/Core/Debugger/*.cpp \
 	$$P/Core/Dialog/*.cpp \
 	$$P/Core/ELF/*.cpp \
+	$$P/Core/FileLoaders/*.cpp \
 	$$P/Core/FileSystems/*.cpp \
 	$$P/Core/Font/*.cpp \
 	$$P/Core/HLE/*.cpp \

@@ -15,6 +15,7 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#include <algorithm>
 #include <stdio.h>
 
 #include "base/basictypes.h"
@@ -26,6 +27,8 @@
 #include "Core/MemMap.h"
 #include "Core/HDRemaster.h"
 #include "Core/Reporting.h"
+#include "Core/MIPS/JitCommon/JitCommon.h"
+#include "GPU/Common/ShaderCommon.h"
 #include "GPU/GPUState.h"
 #include "GPU/ge_constants.h"
 #include "GPU/Math3D.h"
@@ -135,7 +138,7 @@ void PrintDecodedVertex(VertexReader &vtx) {
 	printf("P: %f %f %f\n", pos[0], pos[1], pos[2]);
 }
 
-VertexDecoder::VertexDecoder() : jitted_(0), decoded_(nullptr), ptr_(nullptr) {
+VertexDecoder::VertexDecoder() : jitted_(0), jittedSize_(0), decoded_(nullptr), ptr_(nullptr) {
 }
 
 void VertexDecoder::Step_WeightsU8() const
@@ -294,6 +297,11 @@ void VertexDecoder::Step_TcU16Through() const
 	const u16 *uvdata = (const u16_le*)(ptr_ + tcoff);
 	uv[0] = uvdata[0];
 	uv[1] = uvdata[1];
+
+	gstate_c.vertBounds.minU = std::min(gstate_c.vertBounds.minU, uvdata[0]);
+	gstate_c.vertBounds.maxU = std::max(gstate_c.vertBounds.maxU, uvdata[0]);
+	gstate_c.vertBounds.minV = std::min(gstate_c.vertBounds.minV, uvdata[1]);
+	gstate_c.vertBounds.maxV = std::max(gstate_c.vertBounds.maxV, uvdata[1]);
 }
 
 void VertexDecoder::Step_TcU16ThroughDouble() const
@@ -318,6 +326,11 @@ void VertexDecoder::Step_TcU16ThroughToFloat() const
 	const u16 *uvdata = (const u16_le*)(ptr_ + tcoff);
 	uv[0] = uvdata[0];
 	uv[1] = uvdata[1];
+
+	gstate_c.vertBounds.minU = std::min(gstate_c.vertBounds.minU, uvdata[0]);
+	gstate_c.vertBounds.maxU = std::max(gstate_c.vertBounds.maxU, uvdata[0]);
+	gstate_c.vertBounds.minV = std::min(gstate_c.vertBounds.minV, uvdata[1]);
+	gstate_c.vertBounds.maxV = std::max(gstate_c.vertBounds.maxV, uvdata[1]);
 }
 
 void VertexDecoder::Step_TcU16ThroughDoubleToFloat() const
@@ -342,6 +355,11 @@ void VertexDecoder::Step_TcFloatThrough() const
 	const float *uvdata = (const float*)(ptr_ + tcoff);
 	uv[0] = uvdata[0];
 	uv[1] = uvdata[1];
+
+	gstate_c.vertBounds.minU = std::min(gstate_c.vertBounds.minU, (u16)uvdata[0]);
+	gstate_c.vertBounds.maxU = std::max(gstate_c.vertBounds.maxU, (u16)uvdata[0]);
+	gstate_c.vertBounds.minV = std::min(gstate_c.vertBounds.minV, (u16)uvdata[1]);
+	gstate_c.vertBounds.maxV = std::max(gstate_c.vertBounds.maxV, (u16)uvdata[1]);
 }
 
 void VertexDecoder::Step_TcU8Prescale() const {
@@ -1053,7 +1071,7 @@ void VertexDecoder::SetVertexType(u32 fmt, const VertexDecoderOptions &options, 
 
 	// Attempt to JIT as well
 	if (jitCache && g_Config.bVertexDecoderJit) {
-		jitted_ = jitCache->Compile(*this);
+		jitted_ = jitCache->Compile(*this, &jittedSize_);
 		if (!jitted_) {
 			WARN_LOG(G3D, "Vertex decoder JIT failed! fmt = %08x", fmt_);
 		}
@@ -1111,6 +1129,40 @@ int VertexDecoder::ToString(char *output) const {
 	output += sprintf(output, " (size: %i)", VertexSize());
 	return output - start;
 }
+
+std::string VertexDecoder::GetString(DebugShaderStringType stringType) {
+	char buffer[256];
+	switch (stringType) {
+	case SHADER_STRING_SHORT_DESC:
+		ToString(buffer);
+		return std::string(buffer);
+	case SHADER_STRING_SOURCE_CODE:
+		{
+			if (!jitted_)
+				return "Not compiled";
+			std::vector<std::string> lines;
+#if defined(ARM64)
+			lines = DisassembleArm64((const u8 *)jitted_, jittedSize_);
+#elif defined(ARM)
+			lines = DisassembleArm2((const u8 *)jitted_, jittedSize_);
+#elif defined(MIPS)
+			// No MIPS disassembler defined
+#else
+			lines = DisassembleX86((const u8 *)jitted_, jittedSize_);
+#endif
+			std::string buffer;
+			for (auto line : lines) {
+				buffer += line;
+				buffer += "\n";
+			}
+			return buffer;
+		}
+
+	default:
+		return "N/A";
+	}
+}
+
 
 VertexDecoderJitCache::VertexDecoderJitCache()
 #ifdef ARM64

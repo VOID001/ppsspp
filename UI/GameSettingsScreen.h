@@ -49,6 +49,7 @@ private:
 	UI::CheckBox *enableReportsCheckbox_;
 	UI::Choice *layoutEditorChoice_;
 	UI::Choice *postProcChoice_;
+	UI::Choice *displayEditor_;
 	UI::PopupMultiChoice *resolutionChoice_;
 	UI::CheckBox *frameSkipAuto_;
 #ifdef _WIN32
@@ -66,6 +67,7 @@ private:
 	UI::EventReturn OnReloadCheats(UI::EventParams &e);
 	UI::EventReturn OnTiltTypeChange(UI::EventParams &e);
 	UI::EventReturn OnTiltCustomize(UI::EventParams &e);
+	UI::EventReturn OnCombo_key(UI::EventParams &e);
 
 	// Global settings handlers
 	UI::EventReturn OnLanguage(UI::EventParams &e);
@@ -79,6 +81,7 @@ private:
 	UI::EventReturn OnChangeMacAddress(UI::EventParams &e);
 	UI::EventReturn OnClearRecents(UI::EventParams &e);
 	UI::EventReturn OnFullscreenChange(UI::EventParams &e);
+	UI::EventReturn OnDisplayLayoutEditor(UI::EventParams &e);
 	UI::EventReturn OnResolutionChange(UI::EventParams &e);
 	UI::EventReturn OnHwScaleChange(UI::EventParams &e);
 	UI::EventReturn OnShaderChange(UI::EventParams &e);
@@ -100,6 +103,7 @@ private:
 	UI::EventReturn OnAudioBackend(UI::EventParams &e);
 
 	UI::EventReturn OnSavedataManager(UI::EventParams &e);
+	UI::EventReturn OnSysInfo(UI::EventParams &e);
 
 	// Temporaries to convert bools to int settings
 	bool cap60FPS_;
@@ -125,7 +129,6 @@ protected:
 private:
 	UI::EventReturn OnBack(UI::EventParams &e);
 	UI::EventReturn OnRunCPUTests(UI::EventParams &e);
-	UI::EventReturn OnSysInfo(UI::EventParams &e);
 	UI::EventReturn OnLoggingChanged(UI::EventParams &e);
 	UI::EventReturn OnLoadLanguageIni(UI::EventParams &e);
 	UI::EventReturn OnSaveLanguageIni(UI::EventParams &e);

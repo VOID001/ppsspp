@@ -69,9 +69,7 @@ struct MIPSInstruction {
 	MipsEncoding altEncoding;
 	const char *name;
 	MIPSComp::MIPSCompileFunc compile;
-#ifndef FINAL
 	MIPSDisFunc disasm;
-#endif
 	MIPSInterpretFunc interpret;
 	//MIPSInstructionInfo information;
 	MIPSInfo flags;
@@ -80,13 +78,8 @@ struct MIPSInstruction {
 #define INVALID {Inval}
 #define INVALID_X_8 INVALID,INVALID,INVALID,INVALID,INVALID,INVALID,INVALID,INVALID
 
-#ifndef FINAL
 #define ENCODING(a) {a}
 #define INSTR(name, comp, dis, inter, flags) {Instruc, name, comp, dis, inter, MIPSInfo(flags)}
-#else
-#define ENCODING(a) {a}
-#define INSTR(name, comp, dis, inter, flags) {Instruc, comp, inter, flags}
-#endif
 
 #ifdef ARM
 #define JITFUNC(f) (&ArmJit::f)
@@ -95,7 +88,7 @@ struct MIPSInstruction {
 #elif defined(_M_X64) || defined(_M_IX86)
 #define JITFUNC(f) (&Jit::f)
 #elif defined(MIPS)
-#define JITFUNC(f) (&Jit::f)
+#define JITFUNC(f) (&MipsJit::f)
 #else
 #define JITFUNC(f) (&FakeJit::f)
 #endif

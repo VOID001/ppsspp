@@ -17,16 +17,14 @@
 
 #include <algorithm>
 
-#include "android/app-android.h"
+#include "android/jni/app-android.h"
 #include "base/display.h"
 #include "base/logging.h"
 #include "base/timeutil.h"
 #include "profiler/profiler.h"
 
-#include "gfx_es2/glsl_program.h"
-#include "gfx_es2/gl_state.h"
+#include "gfx_es2/gpu_features.h"
 #include "gfx_es2/draw_text.h"
-#include "gfx_es2/fbo.h"
 
 #include "input/input_state.h"
 #include "ui/ui.h"
@@ -44,9 +42,11 @@
 #include "Core/System.h"
 #include "GPU/GPUState.h"
 #include "GPU/GPUInterface.h"
+#include "GPU/GLES/FBO.h"
 #include "GPU/GLES/Framebuffer.h"
 #include "Core/HLE/sceCtrl.h"
 #include "Core/HLE/sceDisplay.h"
+#include "Core/HLE/sceSas.h"
 #include "Core/Debugger/SymbolMap.h"
 #include "Core/SaveState.h"
 #include "Core/MIPS/MIPS.h"
@@ -64,6 +64,7 @@
 #include "UI/ControlMappingScreen.h"
 #include "UI/GameSettingsScreen.h"
 #include "UI/InstallZipScreen.h"
+#include "UI/ProfilerDraw.h"
 
 EmuScreen::EmuScreen(const std::string &filename)
 	: bootPending_(true), gamePath_(filename), invalid_(true), quit_(false), pauseTrigger_(false), saveStatePreviewShownTime_(0.0), saveStatePreview_(nullptr) {
@@ -113,8 +114,8 @@ void EmuScreen::bootGame(const std::string &filename) {
 	const Bounds &bounds = screenManager()->getUIContext()->GetBounds();
 
 	if (g_Config.iInternalResolution == 0) {
-		coreParam.renderWidth = bounds.w;
-		coreParam.renderHeight = bounds.h;
+		coreParam.renderWidth = pixel_xres;
+		coreParam.renderHeight = pixel_yres;
 	} else {
 		if (g_Config.iInternalResolution < 0)
 			g_Config.iInternalResolution = 1;
@@ -142,11 +143,11 @@ void EmuScreen::bootComplete() {
 	NOTICE_LOG(BOOT, "Loading %s...", PSP_CoreParameter().fileToStart.c_str());
 	autoLoad();
 
-	I18NCategory *s = GetI18NCategory("Screen"); 
+	I18NCategory *sc = GetI18NCategory("Screen"); 
 
 #ifndef MOBILE_DEVICE
 	if (g_Config.bFirstRun) {
-		osm.Show(s->T("PressESC", "Press ESC to open the pause menu"), 3.0f);
+		osm.Show(sc->T("PressESC", "Press ESC to open the pause menu"), 3.0f);
 	}
 #endif
 	memset(virtKeys, 0, sizeof(virtKeys));
@@ -154,9 +155,13 @@ void EmuScreen::bootComplete() {
 	if (g_Config.iGPUBackend == GPU_BACKEND_OPENGL) {
 		const char *renderer = (const char*)glGetString(GL_RENDERER);
 		if (strstr(renderer, "Chainfire3D") != 0) {
-			osm.Show(s->T("Chainfire3DWarning", "WARNING: Chainfire3D detected, may cause problems"), 10.0f, 0xFF30a0FF, -1, true);
+			osm.Show(sc->T("Chainfire3DWarning", "WARNING: Chainfire3D detected, may cause problems"), 10.0f, 0xFF30a0FF, -1, true);
 		} else if (strstr(renderer, "GLTools") != 0) {
-			osm.Show(s->T("GLToolsWarning", "WARNING: GLTools detected, may cause problems"), 10.0f, 0xFF30a0FF, -1, true);
+			osm.Show(sc->T("GLToolsWarning", "WARNING: GLTools detected, may cause problems"), 10.0f, 0xFF30a0FF, -1, true);
+		}
+
+		if (g_Config.bGfxDebugOutput) {
+			osm.Show("WARNING: GfxDebugOutput is enabled via ppsspp.ini. Things may be slow.", 10.0f, 0xFF30a0FF, -1, true);
 		}
 	}
 
@@ -255,8 +260,8 @@ void EmuScreen::sendMessage(const char *message, const char *value) {
 		if (saveStatePreview_) {
 			int curSlot = SaveState::GetCurrentSlot();
 			std::string fn;
-			if (SaveState::HasSaveInSlot(curSlot)) {
-				fn = SaveState::GenerateSaveSlotFilename(curSlot, "jpg");
+			if (SaveState::HasSaveInSlot(gamePath_, curSlot)) {
+				fn = SaveState::GenerateSaveSlotFilename(gamePath_, curSlot, "jpg");
 			}
 
 			saveStatePreview_->SetFilename(fn);
@@ -303,7 +308,7 @@ bool EmuScreen::touch(const TouchInput &touch) {
 }
 
 void EmuScreen::onVKeyDown(int virtualKeyCode) {
-	I18NCategory *s = GetI18NCategory("Screen"); 
+	I18NCategory *sc = GetI18NCategory("Screen"); 
 
 	switch (virtualKeyCode) {
 	case VIRTKEY_UNTHROTTLE:
@@ -313,11 +318,11 @@ void EmuScreen::onVKeyDown(int virtualKeyCode) {
 	case VIRTKEY_SPEED_TOGGLE:
 		if (PSP_CoreParameter().fpsLimit == 0) {
 			PSP_CoreParameter().fpsLimit = 1;
-			osm.Show(s->T("fixed", "Speed: alternate"), 1.0);
+			osm.Show(sc->T("fixed", "Speed: alternate"), 1.0);
 		}
 		else if (PSP_CoreParameter().fpsLimit == 1) {
 			PSP_CoreParameter().fpsLimit = 0;
-			osm.Show(s->T("standard", "Speed: standard"), 1.0);
+			osm.Show(sc->T("standard", "Speed: standard"), 1.0);
 		}
 		break;
 
@@ -327,6 +332,11 @@ void EmuScreen::onVKeyDown(int virtualKeyCode) {
 
 	case VIRTKEY_AXIS_SWAP:
 		KeyMap::SwapAxis();
+		break;
+
+	case VIRTKEY_DEVMENU:
+		releaseButtons();
+		screenManager()->push(new DevMenu());
 		break;
 
 	case VIRTKEY_AXIS_X_MIN:
@@ -358,16 +368,14 @@ void EmuScreen::onVKeyDown(int virtualKeyCode) {
 		if (SaveState::CanRewind()) {
 			SaveState::Rewind();
 		} else {
-			osm.Show(s->T("norewind", "No rewind save states available"), 2.0);
+			osm.Show(sc->T("norewind", "No rewind save states available"), 2.0);
 		}
 		break;
 	case VIRTKEY_SAVE_STATE:
-		SaveState::SaveSlot(g_Config.iCurrentStateSlot, SaveState::Callback());
+		SaveState::SaveSlot(gamePath_, g_Config.iCurrentStateSlot, SaveState::Callback());
 		break;
 	case VIRTKEY_LOAD_STATE:
-		if (SaveState::HasSaveInSlot(g_Config.iCurrentStateSlot)) {
-			SaveState::LoadSlot(g_Config.iCurrentStateSlot, SaveState::Callback());
-		}
+		SaveState::LoadSlot(gamePath_, g_Config.iCurrentStateSlot, SaveState::Callback());
 		break;
 	case VIRTKEY_NEXT_SLOT:
 		SaveState::NextSlot();
@@ -695,11 +703,11 @@ void EmuScreen::update(InputState &input) {
 			quit_ = true;
 			return;
 		}
-		I18NCategory *g = GetI18NCategory("Error");
-		std::string errLoadingFile = g->T("Error loading file", "Could not load game");
+		I18NCategory *err = GetI18NCategory("Error");
+		std::string errLoadingFile = err->T("Error loading file", "Could not load game");
 
 		errLoadingFile.append(" ");
-		errLoadingFile.append(g->T(errorMessage_.c_str()));
+		errLoadingFile.append(err->T(errorMessage_.c_str()));
 
 		screenManager()->push(new PromptScreen(errLoadingFile, "OK", ""));
 		errorMessage_ = "";
@@ -787,6 +795,10 @@ static void DrawDebugStats(DrawBuffer *draw2d) {
 	draw2d->SetFontScale(.7f, .7f);
 	draw2d->DrawText(UBUNTU24, statbuf, 11, 31, 0xc0000000, FLAG_DYNAMIC_ASCII);
 	draw2d->DrawText(UBUNTU24, statbuf, 10, 30, 0xFFFFFFFF, FLAG_DYNAMIC_ASCII);
+
+	__SasGetDebugStats(statbuf, sizeof(statbuf));
+	draw2d->DrawText(UBUNTU24, statbuf, PSP_CoreParameter().pixelWidth / 2 + 11, 31, 0xc0000000, FLAG_DYNAMIC_ASCII);
+	draw2d->DrawText(UBUNTU24, statbuf, PSP_CoreParameter().pixelWidth / 2 + 10, 30, 0xFFFFFFFF, FLAG_DYNAMIC_ASCII);
 	draw2d->SetFontScale(1.0f, 1.0f);
 }
 
@@ -918,20 +930,20 @@ void EmuScreen::render() {
 		screenManager()->getUIContext()->End();
 	}
 
-#ifdef USING_GLES2
 	// We have no use for backbuffer depth or stencil, so let tiled renderers discard them after tiling.
 	if (gl_extensions.GLES3 && glInvalidateFramebuffer != nullptr) {
 		GLenum attachments[2] = { GL_DEPTH, GL_STENCIL };
 		glInvalidateFramebuffer(GL_FRAMEBUFFER, 2, attachments);
 	} else if (!gl_extensions.GLES3) {
+#ifdef USING_GLES2
 		// Tiled renderers like PowerVR should benefit greatly from this. However - seems I can't call it?
 		bool hasDiscard = gl_extensions.EXT_discard_framebuffer;  // TODO
 		if (hasDiscard) {
 			//const GLenum targets[3] = { GL_COLOR_EXT, GL_DEPTH_EXT, GL_STENCIL_EXT };
 			//glDiscardFramebufferEXT(GL_FRAMEBUFFER, 3, targets);
 		}
-	}
 #endif
+	}
 }
 
 void EmuScreen::deviceLost() {
@@ -944,9 +956,9 @@ void EmuScreen::deviceLost() {
 
 void EmuScreen::autoLoad() {
 	//check if save state has save, if so, load
-	int lastSlot = SaveState::GetNewestSlot();
+	int lastSlot = SaveState::GetNewestSlot(gamePath_);
 	if (g_Config.bEnableAutoLoad && lastSlot != -1) {
-		SaveState::LoadSlot(lastSlot, SaveState::Callback(), 0);
+		SaveState::LoadSlot(gamePath_, lastSlot, SaveState::Callback(), 0);
 		g_Config.iCurrentStateSlot = lastSlot;
 	}
 }

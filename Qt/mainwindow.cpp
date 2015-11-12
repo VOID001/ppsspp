@@ -180,12 +180,14 @@ void SaveStateActionFinished(bool result, void *userdata)
 
 void MainWindow::qlstateAct()
 {
-	SaveState::LoadSlot(0, SaveStateActionFinished, this);
+	std::string gamePath = PSP_CoreParameter().fileToStart;
+	SaveState::LoadSlot(gamePath, 0, SaveStateActionFinished, this);
 }
 
 void MainWindow::qsstateAct()
 {
-	SaveState::SaveSlot(0, SaveStateActionFinished, this);
+	std::string gamePath = PSP_CoreParameter().fileToStart;
+	SaveState::SaveSlot(gamePath, 0, SaveStateActionFinished, this);
 }
 
 void MainWindow::lstateAct()
@@ -271,7 +273,7 @@ void MainWindow::lmapAct()
 	if (fileNames.count() > 0)
 	{
 		QString fileName = QFileInfo(fileNames[0]).absoluteFilePath();
-		symbolMap.LoadSymbolMap(fileName.toStdString().c_str());
+		g_symbolMap->LoadSymbolMap(fileName.toStdString().c_str());
 		notifyMapsLoaded();
 	}
 }
@@ -288,13 +290,13 @@ void MainWindow::smapAct()
 	if (dialog.exec())
 	{
 		fileNames = dialog.selectedFiles();
-		symbolMap.SaveSymbolMap(fileNames[0].toStdString().c_str());
+		g_symbolMap->SaveSymbolMap(fileNames[0].toStdString().c_str());
 	}
 }
 
 void MainWindow::resetTableAct()
 {
-	symbolMap.Clear();
+	g_symbolMap->Clear();
 	notifyMapsLoaded();
 }
 

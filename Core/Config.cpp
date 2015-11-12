@@ -47,6 +47,8 @@ http::Downloader g_DownloadManager;
 
 Config g_Config;
 
+bool jitForcedOff;
+
 #ifdef IOS
 extern bool iosCanUseJit;
 #endif
@@ -286,7 +288,6 @@ static ConfigSetting generalSettings[] = {
 	ConfigSetting("IgnoreBadMemAccess", &g_Config.bIgnoreBadMemAccess, true, true),
 	ConfigSetting("CurrentDirectory", &g_Config.currentDirectory, ""),
 	ConfigSetting("ShowDebuggerOnLoad", &g_Config.bShowDebuggerOnLoad, false),
-	ConfigSetting("HomebrewStore", &g_Config.bHomebrewStore, false, false),
 	ConfigSetting("CheckForNewVersion", &g_Config.bCheckForNewVersion, true),
 	ConfigSetting("Language", &g_Config.sLanguageIni, &DefaultLangRegion),
 	ConfigSetting("ForceLagSync", &g_Config.bForceLagSync, false, true, true),
@@ -303,6 +304,7 @@ static ConfigSetting generalSettings[] = {
 	ConfigSetting("GridView1", &g_Config.bGridView1, true),
 	ConfigSetting("GridView2", &g_Config.bGridView2, true),
 	ConfigSetting("GridView3", &g_Config.bGridView3, false),
+	ConfigSetting("ComboMode", &g_Config.iComboMode, 0),
 
 	// "default" means let emulator decide, "" means disable.
 	ConfigSetting("ReportingHost", &g_Config.sReportHost, "default"),
@@ -324,16 +326,9 @@ static ConfigSetting generalSettings[] = {
 #endif
 	ConfigSetting("PauseWhenMinimized", &g_Config.bPauseWhenMinimized, false, true, true),
 	ConfigSetting("DumpDecryptedEboots", &g_Config.bDumpDecryptedEboot, false, true, true),
+	ConfigSetting("FullscreenOnDoubleclick", &g_Config.bFullscreenOnDoubleclick, true, false, false),
 	ConfigSetting(false),
 };
-
-static bool DefaultForceFlushToZero() {
-#ifdef ARM
-	return true;
-#else
-	return false;
-#endif
-}
 
 static ConfigSetting cpuSettings[] = {
 	ReportedConfigSetting("Jit", &g_Config.bJit, &DefaultJit, true, true),
@@ -343,8 +338,6 @@ static ConfigSetting cpuSettings[] = {
 	ConfigSetting("FastMemoryAccess", &g_Config.bFastMemory, true, true, true),
 	ReportedConfigSetting("FuncReplacements", &g_Config.bFuncReplacements, true, true, true),
 	ReportedConfigSetting("CPUSpeed", &g_Config.iLockedCPUSpeed, 0, true, true),
-	ReportedConfigSetting("SetRoundingMode", &g_Config.bSetRoundingMode, true, true, true),
-	ReportedConfigSetting("ForceFlushToZero", &g_Config.bForceFlushToZero, &DefaultForceFlushToZero, true, true),
 
 	ConfigSetting(false),
 };
@@ -433,7 +426,9 @@ static ConfigSetting graphicsSettings[] = {
 	ConfigSetting("FrameSkipUnthrottle", &g_Config.bFrameSkipUnthrottle, true),
 #endif
 	ReportedConfigSetting("ForceMaxEmulatedFPS", &g_Config.iForceMaxEmulatedFPS, 60, true, true),
-#ifdef USING_GLES2
+
+	// TODO: Hm, on fast mobile GPUs we should definitely default to at least 4...
+#ifdef MOBILE_DEVICE
 	ConfigSetting("AnisotropyLevel", &g_Config.iAnisotropyLevel, 0, true, true),
 #else
 	ConfigSetting("AnisotropyLevel", &g_Config.iAnisotropyLevel, 8, true, true),
@@ -443,14 +438,17 @@ static ConfigSetting graphicsSettings[] = {
 	ReportedConfigSetting("TextureSecondaryCache", &g_Config.bTextureSecondaryCache, false, true, true),
 	ReportedConfigSetting("VertexDecJit", &g_Config.bVertexDecoderJit, &DefaultJit, false),
 
-#ifdef _WIN32
+#ifndef MOBILE_DEVICE
 	ConfigSetting("FullScreen", &g_Config.bFullScreen, false),
 #endif
 
 	// TODO: Replace these settings with a list of options
 	ConfigSetting("PartialStretch", &g_Config.bPartialStretch, &DefaultPartialStretch, true, true),
 	ConfigSetting("StretchToDisplay", &g_Config.bStretchToDisplay, false, true, true),
-	ConfigSetting("SmallDisplay", &g_Config.bSmallDisplay, false, true, true),
+	ConfigSetting("SmallDisplayZoom", &g_Config.iSmallDisplayZoom, 0, true, true),
+	ConfigSetting("SmallDisplayOffsetX", &g_Config.fSmallDisplayOffsetX, 0.5f, true, true),
+	ConfigSetting("SmallDisplayOffsetY", &g_Config.fSmallDisplayOffsetY, 0.5f, true, true),
+	ConfigSetting("SmallDisplayCustomZoom", &g_Config.fSmallDisplayCustomZoom, 8.0f, true, true),
 	ConfigSetting("ImmersiveMode", &g_Config.bImmersiveMode, false, true, true),
 
 	ReportedConfigSetting("TrueColor", &g_Config.bTrueColor, true, true, true),
@@ -476,6 +474,7 @@ static ConfigSetting graphicsSettings[] = {
 	ReportedConfigSetting("DisableSlowFramebufEffects", &g_Config.bDisableSlowFramebufEffects, false, true, true),
 	ReportedConfigSetting("FragmentTestCache", &g_Config.bFragmentTestCache, true, true, true),
 
+	ConfigSetting("GfxDebugOutput", &g_Config.bGfxDebugOutput, false, false, false),
 	ConfigSetting(false), 
 };
 
@@ -490,7 +489,6 @@ static ConfigSetting soundSettings[] = {
 };
 
 static bool DefaultShowTouchControls() {
-#if defined(MOBILE_DEVICE)
 	int deviceType = System_GetPropertyInt(SYSPROP_DEVICE_TYPE);
 	if (deviceType == DEVICE_TYPE_MOBILE) {
 		std::string name = System_GetProperty(SYSPROP_NAME);
@@ -506,9 +504,6 @@ static bool DefaultShowTouchControls() {
 	} else {
 		return false;
 	}
-#else
-	return false;
-#endif
 }
 
 static const float defaultControlScale = 1.15f;
@@ -526,6 +521,18 @@ static ConfigSetting controlSettings[] = {
 	ConfigSetting("ShowAnalogStick", &g_Config.bShowTouchAnalogStick, true, true, true),
 	ConfigSetting("ShowTouchDpad", &g_Config.bShowTouchDpad, true, true, true),
 	ConfigSetting("ShowTouchUnthrottle", &g_Config.bShowTouchUnthrottle, true, true, true),
+
+	ConfigSetting("ShowComboKey0", &g_Config.bShowComboKey0, false, true, true),
+	ConfigSetting("ShowComboKey1", &g_Config.bShowComboKey1, false, true, true),
+	ConfigSetting("ShowComboKey2", &g_Config.bShowComboKey2, false, true, true),
+	ConfigSetting("ShowComboKey3", &g_Config.bShowComboKey3, false, true, true),
+	ConfigSetting("ShowComboKey4", &g_Config.bShowComboKey4, false, true, true),
+	ConfigSetting("ComboKey0Mapping", &g_Config.iCombokey0, 0, true, true),
+	ConfigSetting("ComboKey1Mapping", &g_Config.iCombokey1, 0, true, true),
+	ConfigSetting("ComboKey2Mapping", &g_Config.iCombokey2, 0, true, true),
+	ConfigSetting("ComboKey3Mapping", &g_Config.iCombokey3, 0, true, true),
+	ConfigSetting("ComboKey4Mapping", &g_Config.iCombokey4, 0, true, true),
+
 #if !defined(__SYMBIAN32__) && !defined(IOS) && !defined(MAEMO)
 #if defined(_WIN32)
 	// A win32 user seeing touch controls is likely using PPSSPP on a tablet. There it makes
@@ -587,6 +594,22 @@ static ConfigSetting controlSettings[] = {
 	ConfigSetting("AnalogStickX", &g_Config.fAnalogStickX, -1.0f, true, true),
 	ConfigSetting("AnalogStickY", &g_Config.fAnalogStickY, -1.0f, true, true),
 	ConfigSetting("AnalogStickScale", &g_Config.fAnalogStickScale, defaultControlScale, true, true),
+
+	ConfigSetting("fcombo0X", &g_Config.fcombo0X, -1.0f, true, true),
+	ConfigSetting("fcombo0Y", &g_Config.fcombo0Y, -1.0f, true, true),
+	ConfigSetting("comboKeyScale0", &g_Config.fcomboScale0, defaultControlScale, true, true),
+	ConfigSetting("fcombo1X", &g_Config.fcombo1X, -1.0f, true, true),
+	ConfigSetting("fcombo1Y", &g_Config.fcombo1Y, -1.0f, true, true),
+	ConfigSetting("comboKeyScale1", &g_Config.fcomboScale1, defaultControlScale, true, true),
+	ConfigSetting("fcombo2X", &g_Config.fcombo2X, -1.0f, true, true),
+	ConfigSetting("fcombo2Y", &g_Config.fcombo2Y, -1.0f, true, true),
+	ConfigSetting("comboKeyScale2", &g_Config.fcomboScale2, defaultControlScale, true, true),
+	ConfigSetting("fcombo3X", &g_Config.fcombo3X, -1.0f, true, true),
+	ConfigSetting("fcombo3Y", &g_Config.fcombo3Y, -1.0f, true, true),
+	ConfigSetting("comboKeyScale3", &g_Config.fcomboScale3, defaultControlScale, true, true),
+	ConfigSetting("fcombo4X", &g_Config.fcombo4X, -1.0f, true, true),
+	ConfigSetting("fcombo4Y", &g_Config.fcombo4Y, -1.0f, true, true),
+	ConfigSetting("comboKeyScale4", &g_Config.fcomboScale4, defaultControlScale, true, true),
 #ifdef _WIN32
 	ConfigSetting("DInputAnalogDeadzone", &g_Config.fDInputAnalogDeadzone, 0.1f, true, true),
 	ConfigSetting("DInputAnalogInverseMode", &g_Config.iDInputAnalogInverseMode, 0, true, true),
@@ -785,21 +808,21 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 
 	// Fix issue from switching from uint (hex in .ini) to int (dec)
 	// -1 is okay, though. We'll just ignore recent stuff if it is.
-	 if (iMaxRecent == 0)
+	if (iMaxRecent == 0)
 		iMaxRecent = 30;
 
-	 if (iMaxRecent > 0) {
-		 recentIsos.clear();
-		 for (int i = 0; i < iMaxRecent; i++) {
-			 char keyName[64];
-			 std::string fileName;
+	if (iMaxRecent > 0) {
+		recentIsos.clear();
+		for (int i = 0; i < iMaxRecent; i++) {
+			char keyName[64];
+			std::string fileName;
 
-			 snprintf(keyName, sizeof(keyName), "FileName%d", i);
-			 if (recent->Get(keyName, &fileName, "") && !fileName.empty()) {
-				 recentIsos.push_back(fileName);
-			 }
-		 }
-	 }
+			snprintf(keyName, sizeof(keyName), "FileName%d", i);
+			if (recent->Get(keyName, &fileName, "") && !fileName.empty()) {
+				recentIsos.push_back(fileName);
+			}
+		}
+	}
 
 	auto pinnedPaths = iniFile.GetOrCreateSection("PinnedPaths")->ToMap();
 	vPinnedPaths.clear();
@@ -841,6 +864,16 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 		fRKeyY /= screen_height;
 		fAnalogStickX /= screen_width;
 		fAnalogStickY /= screen_height;
+		fcombo0X /= screen_width;
+		fcombo0Y /= screen_height;
+		fcombo1X /= screen_width;
+		fcombo1Y /= screen_height;
+		fcombo2X /= screen_width;
+		fcombo2Y /= screen_height;
+		fcombo3X /= screen_width;
+		fcombo3Y /= screen_height;
+		fcombo4X /= screen_width;
+		fcombo4Y /= screen_height;
 	}
 	
 	const char *gitVer = PPSSPP_GIT_VERSION;
@@ -900,9 +933,19 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 	if (g_Config.bAutoFrameSkip && g_Config.iRenderingMode == FB_NON_BUFFERED_MODE) {
 		g_Config.iRenderingMode = FB_BUFFERED_MODE;
 	}
+
+	// Override ppsspp.ini JIT value to prevent crashing
+	if (!DefaultJit() && g_Config.bJit) {
+		jitForcedOff = true;
+		g_Config.bJit = false;
+	}
 }
 
 void Config::Save() {
+	if (jitForcedOff) {
+		// if JIT has been forced off, we don't want to screw up the user's ppsspp.ini
+		g_Config.bJit = true;
+	}
 	if (iniFilename_.size() && g_Config.bSaveSettings) {
 		
 		saveGameConfig(gameId_);
@@ -970,6 +1013,10 @@ void Config::Save() {
 		}
 	} else {
 		INFO_LOG(LOADER, "Not saving config");
+	}
+	if (jitForcedOff) {
+		// force JIT off again just in case Config::Save() is called without exiting PPSSPP
+		g_Config.bJit = false;
 	}
 }
 
@@ -1123,10 +1170,7 @@ void Config::RestoreDefaults() {
 bool Config::hasGameConfig(const std::string &pGameId)
 {
 	std::string fullIniFilePath = getGameConfigFile(pGameId);
-
-	IniFile existsCheck;
-	bool exists = existsCheck.Load(fullIniFilePath);
-	return exists;
+	return File::Exists(fullIniFilePath);
 }
 
 void Config::changeGameSpecific(const std::string &pGameId)
@@ -1256,6 +1300,21 @@ void Config::ResetControlLayout() {
 	g_Config.fAnalogStickX = -1.0;
 	g_Config.fAnalogStickY = -1.0;
 	g_Config.fAnalogStickScale = defaultControlScale;
+	g_Config.fcombo0X = -1.0;
+	g_Config.fcombo0Y = -1.0;
+	g_Config.fcomboScale0 = defaultControlScale;
+	g_Config.fcombo1X = -1.0f;
+	g_Config.fcombo1Y = -1.0f;
+	g_Config.fcomboScale1 = defaultControlScale;
+	g_Config.fcombo2X = -1.0f;
+	g_Config.fcombo2Y = -1.0f;
+	g_Config.fcomboScale2 = defaultControlScale;
+	g_Config.fcombo3X = -1.0f;
+	g_Config.fcombo3Y = -1.0f;
+	g_Config.fcomboScale3 = defaultControlScale;
+	g_Config.fcombo4X = -1.0f;
+	g_Config.fcombo4Y = -1.0f;
+	g_Config.fcomboScale4 = defaultControlScale;
 }
 
 void Config::GetReportingInfo(UrlEncoder &data) {

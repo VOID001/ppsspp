@@ -68,7 +68,7 @@ private:
 	FILE *fp_;
 };
 
-static bool WriteScreenshotToJPEG(const char *filename, int width, int height, int num_channels, const uint8 *image_data, const jpge::params &comp_params) {
+static bool WriteScreenshotToJPEG(const char *filename, int width, int height, int num_channels, const uint8_t *image_data, const jpge::params &comp_params) {
 	JPEGFileStream dst_stream(filename);
 	if (!dst_stream.Valid()) {
 		ERROR_LOG(COMMON, "Unable to open screenshot file for writing.");
@@ -83,7 +83,7 @@ static bool WriteScreenshotToJPEG(const char *filename, int width, int height, i
 
 	for (u32 pass_index = 0; pass_index < dst_image.get_total_passes(); pass_index++) {
 		for (int i = 0; i < height; i++) {
-			const uint8 *buf = image_data + i * width * num_channels;
+			const uint8_t *buf = image_data + i * width * num_channels;
 			if (!dst_image.process_scanline(buf)) {
 				ERROR_LOG(COMMON, "Screenshot JPEG encode scanline failed.");
 				return false;
@@ -259,7 +259,7 @@ bool TakeGameScreenshot(const char *filename, ScreenshotFormat fmt, ScreenshotTy
 			png.format = PNG_FORMAT_RGB;
 			png.width = buf.GetStride();
 			png.height = buf.GetHeight();
-			success = WriteScreenshotToPNG(&png, filename, 0, flipbuffer, buf.GetStride() * 3, nullptr);
+			success = WriteScreenshotToPNG(&png, filename, 0, buffer, buf.GetStride() * 3, nullptr);
 			png_image_free(&png);
 
 			if (png.warning_or_error >= 2) {
@@ -269,7 +269,7 @@ bool TakeGameScreenshot(const char *filename, ScreenshotFormat fmt, ScreenshotTy
 		} else if (success && fmt == SCREENSHOT_JPG) {
 			jpge::params params;
 			params.m_quality = 90;
-			success = WriteScreenshotToJPEG(filename, buf.GetStride(), buf.GetHeight(), 3, flipbuffer, params);
+			success = WriteScreenshotToJPEG(filename, buf.GetStride(), buf.GetHeight(), 3, buffer, params);
 		} else {
 			success = false;
 		}

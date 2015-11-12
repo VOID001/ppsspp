@@ -150,11 +150,7 @@ bool TransformDrawEngineDX9::ApplyShaderBlending() {
 		return false;
 	}
 
-	framebufferManager_->BindFramebufferColor(1, nullptr, false);
-	// If we are rendering at a higher resolution, linear is probably best for the dest color.
-	pD3Ddevice->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-	pD3Ddevice->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-	fboTexBound_ = true;
+	fboTexNeedBind_ = true;
 
 	shaderManager_->DirtyUniform(DIRTY_SHADERBLEND);
 	return true;
@@ -286,7 +282,7 @@ void TransformDrawEngineDX9::ApplyBlendState() {
 	// Unfortunately, we can't really do this in Direct3D 9...
 	gstate_c.allowShaderBlend = false;
 
-	ReplaceBlendType replaceBlend = ReplaceBlendWithShader();
+	ReplaceBlendType replaceBlend = ReplaceBlendWithShader(gstate_c.allowShaderBlend, gstate.FrameBufFormat());
 	ReplaceAlphaType replaceAlphaWithStencil = ReplaceAlphaWithStencil(replaceBlend);
 	bool usePreSrc = false;
 
@@ -369,6 +365,21 @@ void TransformDrawEngineDX9::ApplyBlendState() {
 	D3DBLEND glBlendFuncA = blendFuncA == GE_SRCBLEND_FIXA ? blendColor2Func(gstate.getFixA(), approxFuncA) : aLookup[blendFuncA];
 	bool approxFuncB = false;
 	D3DBLEND glBlendFuncB = blendFuncB == GE_DSTBLEND_FIXB ? blendColor2Func(gstate.getFixB(), approxFuncB) : bLookup[blendFuncB];
+
+	if (gstate.FrameBufFormat() == GE_FORMAT_565) {
+		if (blendFuncA == GE_SRCBLEND_DSTALPHA || blendFuncA == GE_SRCBLEND_DOUBLEDSTALPHA) {
+			glBlendFuncA = D3DBLEND_ZERO;
+		}
+		if (blendFuncA == GE_SRCBLEND_INVDSTALPHA || blendFuncA == GE_SRCBLEND_DOUBLEINVDSTALPHA) {
+			glBlendFuncA = D3DBLEND_ONE;
+		}
+		if (blendFuncB == GE_DSTBLEND_DSTALPHA || blendFuncB == GE_DSTBLEND_DOUBLEDSTALPHA) {
+			glBlendFuncB = D3DBLEND_ZERO;
+		}
+		if (blendFuncB == GE_DSTBLEND_INVDSTALPHA || blendFuncB == GE_DSTBLEND_DOUBLEINVDSTALPHA) {
+			glBlendFuncB = D3DBLEND_ONE;
+		}
+	}
 
 	if (usePreSrc) {
 		glBlendFuncA = D3DBLEND_ONE;
@@ -639,19 +650,6 @@ void TransformDrawEngineDX9::ApplyDrawState(int prim) {
 		}
 	}
 
-#if defined(DX9_USE_HW_ALPHA_TEST)
-	// Older hardware (our target for DX9) often has separate alpha testing hardware that
-	// is generally faster than using discard/clip. Let's use it.
-	if (gstate.alphaTestEnable) {
-		dxstate.alphaTest.enable();
-		GEComparison alphaTestFunc = gstate.getAlphaTestFunction();
-		dxstate.alphaTestFunc.set(ztests[alphaTestFunc]);
-		dxstate.alphaTestRef.set(gstate.getAlphaTestRef());
-	} else {
-		dxstate.alphaTest.disable();
-	}
-#endif
-
 	float renderWidthFactor, renderHeightFactor;
 	float renderWidth, renderHeight;
 	float renderX, renderY;
@@ -666,12 +664,12 @@ void TransformDrawEngineDX9::ApplyDrawState(int prim) {
 	} else {
 		float pixelW = PSP_CoreParameter().pixelWidth;
 		float pixelH = PSP_CoreParameter().pixelHeight;
-		CenterRect(&renderX, &renderY, &renderWidth, &renderHeight, 480, 272, pixelW, pixelH, ROTATION_LOCKED_HORIZONTAL);
+		CenterDisplayOutputRect(&renderX, &renderY, &renderWidth, &renderHeight, 480, 272, pixelW, pixelH, ROTATION_LOCKED_HORIZONTAL);
 		renderWidthFactor = renderWidth / 480.0f;
 		renderHeightFactor = renderHeight / 272.0f;
 	}
 
-	renderX += gstate_c.cutRTOffsetX * renderWidthFactor;
+	renderX += gstate_c.curRTOffsetX * renderWidthFactor;
 
 	bool throughmode = gstate.isModeThrough();
 
@@ -695,33 +693,24 @@ void TransformDrawEngineDX9::ApplyDrawState(int prim) {
 			renderY + scissorY2 * renderHeightFactor);
 	}
 
-	/*
-	int regionX1 = gstate.region1 & 0x3FF;
-	int regionY1 = (gstate.region1 >> 10) & 0x3FF;
-	int regionX2 = (gstate.region2 & 0x3FF) + 1;
-	int regionY2 = ((gstate.region2 >> 10) & 0x3FF) + 1;
-	*/
-	int regionX1 = 0;
-	int regionY1 = 0;
-	int regionX2 = gstate_c.curRTWidth;
-	int regionY2 = gstate_c.curRTHeight;
+	int curRTWidth = gstate_c.curRTWidth;
+	int curRTHeight = gstate_c.curRTHeight;
 
 	float offsetX = gstate.getOffsetX();
 	float offsetY = gstate.getOffsetY();
 
 	if (throughmode) {
-		// No viewport transform here. Let's experiment with using region.
 		dxstate.viewport.set(
-			renderX + (0 + regionX1) * renderWidthFactor, 
-			renderY + (0 + regionY1) * renderHeightFactor,
-			(regionX2 - regionX1) * renderWidthFactor,
-			(regionY2 - regionY1) * renderHeightFactor,
+			renderX,
+			renderY,
+			curRTWidth * renderWidthFactor,
+			curRTHeight * renderHeightFactor,
 			0.f, 1.f);
 	} else {
-		float vpXScale = getFloat24(gstate.viewportx1);
-		float vpXCenter = getFloat24(gstate.viewportx2);
-		float vpYScale = getFloat24(gstate.viewporty1);
-		float vpYCenter = getFloat24(gstate.viewporty2);
+		float vpXScale = gstate.getViewportXScale();
+		float vpXCenter = gstate.getViewportXCenter();
+		float vpYScale = gstate.getViewportYScale();
+		float vpYCenter = gstate.getViewportYCenter();
 
 		// The viewport transform appears to go like this: 
 		// Xscreen = -offsetX + vpXCenter + vpXScale * Xview
@@ -742,13 +731,16 @@ void TransformDrawEngineDX9::ApplyDrawState(int prim) {
 		vpWidth *= renderWidthFactor;
 		vpHeight *= renderHeightFactor;
 
-		float zScale = getFloat24(gstate.viewportz1) / 65535.0f;
-		float zOff = getFloat24(gstate.viewportz2) / 65535.0f;
+		float zScale = gstate.getViewportZScale();
+		float zCenter = gstate.getViewportZCenter();
 
-		float depthRangeMin = zOff - fabsf(zScale);
-		float depthRangeMax = zOff + fabsf(zScale);
+		// Note - We lose the sign of the zscale here. But we keep it in gstate_c.vpDepth.
+		// That variable is only check for sign later so the multiplication by 2 isn't really necessary.
 
-		gstate_c.vpDepth = zScale * 2;
+		// It's unclear why we need this Z offset to match OpenGL, but this checks out in multiple games.
+		float depthRangeMin = (zCenter - fabsf(zScale)) * (1.0f / 65535.0f);
+		float depthRangeMax = (zCenter + fabsf(zScale)) * (1.0f / 65535.0f);
+		gstate_c.vpDepth = zScale * (2.0f / 65335.0f);
 
 		// D3D doesn't like viewports partially outside the target, so we
 		// apply the viewport partially in the shader.
@@ -780,13 +772,13 @@ void TransformDrawEngineDX9::ApplyDrawState(int prim) {
 			float overageTop = std::max(-top, 0.0f);
 			float overageBottom = std::max(bottom - renderHeight, 0.0f);
 			// Our center drifted by the difference in overages.
-			float drift = overageBottom - overageTop;
+			float drift = overageTop - overageBottom;
 
 			top += overageTop;
 			bottom -= overageBottom;
 
 			hScale = vpHeight / (bottom - top);
-			yOffset = -drift / (bottom - top);
+			yOffset = drift / (bottom - top);
 		}
 
 		depthRangeMin = std::max(0.0f, depthRangeMin);
@@ -807,4 +799,24 @@ void TransformDrawEngineDX9::ApplyDrawState(int prim) {
 	}
 }
 
-};
+void TransformDrawEngineDX9::ApplyDrawStateLate() {
+	// At this point, we know if the vertices are full alpha or not.
+	// TODO: Set the nearest/linear here (since we correctly know if alpha/color tests are needed)?
+	if (!gstate.isModeClear()) {
+		// TODO: Test texture?
+
+		textureCache_->ApplyTexture();
+
+		if (fboTexNeedBind_) {
+			// Note that this is positions, not UVs, that we need the copy from.
+			framebufferManager_->BindFramebufferColor(1, nullptr, BINDFBCOLOR_MAY_COPY);
+			// If we are rendering at a higher resolution, linear is probably best for the dest color.
+			pD3Ddevice->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			pD3Ddevice->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			fboTexBound_ = true;
+			fboTexNeedBind_ = false;
+		}
+	}
+}
+
+}

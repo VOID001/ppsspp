@@ -57,6 +57,7 @@ namespace MIPSComp {
 		JitState()
 			: hasSetRounding(0),
 			lastSetRounding(0),
+			currentRoundingFunc(nullptr),
 			startDefaultPrefix(true),
 			prefixSFlag(PREFIX_UNKNOWN),
 			prefixTFlag(PREFIX_UNKNOWN),
@@ -78,6 +79,7 @@ namespace MIPSComp {
 
 		u8 hasSetRounding;
 		u8 lastSetRounding;
+		const u8 *currentRoundingFunc;
 
 		// VFPU prefix magic
 		bool startDefaultPrefix;
@@ -192,6 +194,7 @@ namespace MIPSComp {
 		bool downcountInRegister;
 		// ARM64 only
 		bool useASIMDVFPU;
+		bool useStaticAlloc;
 
 		// Common
 		bool enableBlocklink;

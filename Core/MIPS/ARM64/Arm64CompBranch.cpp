@@ -15,6 +15,8 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#include "profiler/profiler.h"
+
 #include "Core/Reporting.h"
 #include "Core/Config.h"
 #include "Core/MemMap.h"
@@ -227,6 +229,7 @@ void Arm64Jit::BranchRSZeroComp(MIPSOpcode op, CCFlags cc, bool andLink, bool li
 		if (!likely && delaySlotIsNice)
 			CompileDelaySlot(DELAYSLOT_NICE);
 
+		// TODO: Maybe we could use BZ here?
 		gpr.MapReg(rs);
 		CMP(gpr.R(rs), 0);
 
@@ -319,8 +322,9 @@ void Arm64Jit::BranchFPFlag(MIPSOpcode op, CCFlags cc, bool likely) {
 	if (!likely && delaySlotIsNice)
 		CompileDelaySlot(DELAYSLOT_NICE);
 
+	// TODO: Maybe we could use TBZ here?
 	gpr.MapReg(MIPS_REG_FPCOND);
-	TSTI2R(gpr.R(MIPS_REG_FPCOND), 1, W0);
+	TSTI2R(gpr.R(MIPS_REG_FPCOND), 1, SCRATCH1);
 	Arm64Gen::FixupBranch ptr;
 	if (!likely) {
 		if (!delaySlotIsNice)
@@ -350,7 +354,7 @@ void Arm64Jit::Comp_FPUBranch(MIPSOpcode op) {
 	case 2: BranchFPFlag(op, CC_NEQ, true);  break;  // bc1fl
 	case 3: BranchFPFlag(op, CC_EQ, true);  break;  // bc1tl
 	default:
-		_dbg_assert_msg_(CPU,0,"Trying to interpret instruction that can't be interpreted");
+		_dbg_assert_msg_(CPU, 0, "Trying to interpret instruction that can't be interpreted");
 		break;
 	}
 }
@@ -379,8 +383,9 @@ void Arm64Jit::BranchVFPUFlag(MIPSOpcode op, CCFlags cc, bool likely) {
 
 	int imm3 = (op >> 18) & 7;
 
+	// TODO: Maybe could use TBZ?
 	gpr.MapReg(MIPS_REG_VFPUCC);
-	TSTI2R(gpr.R(MIPS_REG_VFPUCC), 1 << imm3, W0);
+	TSTI2R(gpr.R(MIPS_REG_VFPUCC), 1 << imm3, SCRATCH1);
 
 	Arm64Gen::FixupBranch ptr;
 	js.inDelaySlot = true;
@@ -580,14 +585,18 @@ void Arm64Jit::Comp_Syscall(MIPSOpcode op)
 
 	// If we're in a delay slot, this is off by one.
 	const int offset = js.inDelaySlot ? -1 : 0;
-	WriteDownCount(offset);
+	WriteDownCount(offset, false);
 	RestoreRoundingMode();
 	js.downcountAmount = -offset;
 
-	// TODO: Maybe discard v0, v1, and some temps?  Definitely at?
 	FlushAll();
 
-	SaveDowncount();
+	SaveStaticRegisters();
+#ifdef USE_PROFILER
+	// When profiling, we can't skip CallSyscall, since it times syscalls.
+	MOVI2R(W0, op.encoding);
+	QuickCallFunction(X1, (void *)&CallSyscall);
+#else
 	// Skip the CallSyscall where possible.
 	void *quickFunc = GetQuickSyscallFunc(op);
 	if (quickFunc) {
@@ -598,8 +607,9 @@ void Arm64Jit::Comp_Syscall(MIPSOpcode op)
 		MOVI2R(W0, op.encoding);
 		QuickCallFunction(X1, (void *)&CallSyscall);
 	}
+#endif
+	LoadStaticRegisters();
 	ApplyRoundingMode();
-	RestoreDowncount();
 
 	WriteSyscallExit();
 	js.compiling = false;

@@ -26,6 +26,7 @@
 #include "ui/ui_screen.h"
 
 #include "UI/MiscScreens.h"
+#include "GPU/Common/ShaderCommon.h"
 
 class DevMenu : public PopupScreen {
 public:
@@ -38,6 +39,7 @@ protected:
 	UI::EventReturn OnLogView(UI::EventParams &e);
 	UI::EventReturn OnLogConfig(UI::EventParams &e);
 	UI::EventReturn OnJitCompare(UI::EventParams &e);
+	UI::EventReturn OnShaderView(UI::EventParams &e);
 	UI::EventReturn OnFreezeFrame(UI::EventParams &e);
 	UI::EventReturn OnDumpFrame(UI::EventParams &e);
 	UI::EventReturn OnDeveloperTools(UI::EventParams &e);
@@ -97,7 +99,7 @@ public:
 
 protected:
 	virtual void CreatePopupContents(UI::ViewGroup *parent) override;
-	virtual void OnCompleted(DialogResult result);
+	virtual void OnCompleted(DialogResult result) override;
 	UI::EventReturn OnDigitButton(UI::EventParams &e);
 	UI::EventReturn OnBackspace(UI::EventParams &e);
 
@@ -114,7 +116,7 @@ private:
 class JitCompareScreen : public UIDialogScreenWithBackground {
 public:
 	JitCompareScreen() : currentBlock_(-1) {}
-	virtual void CreateViews();
+	virtual void CreateViews() override;
 
 private:
 	void UpdateDisasm();
@@ -137,9 +139,32 @@ private:
 	UI::TextEdit *blockAddr_;
 	UI::TextView *blockStats_;
 
-	UI::LinearLayout *leftDisasm_;	
-	UI::LinearLayout *rightDisasm_;	
+	UI::LinearLayout *leftDisasm_;
+	UI::LinearLayout *rightDisasm_;
 };
 
+class ShaderListScreen : public UIDialogScreenWithBackground {
+public:
+	ShaderListScreen() {}
+	void CreateViews() override;
+
+private:
+	void ListShaders(DebugShaderType shaderType, UI::LinearLayout *view);
+
+	UI::EventReturn OnShaderClick(UI::EventParams &e);
+
+	UI::TabHolder *tabs_;
+};
+
+class ShaderViewScreen : public UIDialogScreenWithBackground {
+public:
+	ShaderViewScreen(std::string id, DebugShaderType type)
+		: id_(id), type_(type) {}
+
+	void CreateViews() override;
+private:
+	std::string id_;
+	DebugShaderType type_;
+};
 
 void DrawProfile(UIContext &ui);

@@ -126,9 +126,6 @@
     <ClInclude Include="Directx9\helper\dx_state.h">
       <Filter>DirectX9\helper</Filter>
     </ClInclude>
-    <ClInclude Include="Directx9\helper\fbo.h">
-      <Filter>DirectX9\helper</Filter>
-    </ClInclude>
     <ClInclude Include="Directx9\helper\global.h">
       <Filter>DirectX9\helper</Filter>
     </ClInclude>
@@ -183,6 +180,23 @@
     <ClInclude Include="Common\TextureScalerCommon.h">
       <Filter>Common</Filter>
     </ClInclude>
+    <ClInclude Include="GPU.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="GLES\FBO.h">
+      <Filter>GLES</Filter>
+    </ClInclude>
+    <ClInclude Include="Directx9\helper\dx_fbo.h">
+      <Filter>DirectX9\helper</Filter>
+    </ClInclude>
+    <ClInclude Include="GLES\GLStateCache.h">
+      <Filter>GLES</Filter>
+    </ClInclude>
+    <ClInclude Include="Common\ShaderCommon.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Common\ShaderId.h" />
+    <ClInclude Include="Common\GPUStateUtils.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Math3D.cpp">
@@ -281,9 +295,6 @@
     <ClCompile Include="Directx9\helper\dx_state.cpp">
       <Filter>DirectX9\helper</Filter>
     </ClCompile>
-    <ClCompile Include="Directx9\helper\fbo.cpp">
-      <Filter>DirectX9\helper</Filter>
-    </ClCompile>
     <ClCompile Include="Directx9\helper\global.cpp">
       <Filter>DirectX9\helper</Filter>
     </ClCompile>
@@ -350,8 +361,22 @@
     <ClCompile Include="Common\TextureScalerCommon.cpp">
       <Filter>Common</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="CMakeLists.txt" />
+    <ClCompile Include="Common\GPUDebugInterface.cpp">
+      <Filter>Common</Filter>
+    </ClCompile>
+    <ClCompile Include="GPU.cpp">
+      <Filter>Common</Filter>
+    </ClCompile>
+    <ClCompile Include="GLES\FBO.cpp">
+      <Filter>GLES</Filter>
+    </ClCompile>
+    <ClCompile Include="Directx9\helper\dx_fbo.cpp">
+      <Filter>DirectX9\helper</Filter>
+    </ClCompile>
+    <ClCompile Include="GLES\GLStateCache.cpp">
+      <Filter>GLES</Filter>
+    </ClCompile>
+    <ClCompile Include="Common\ShaderId.cpp" />
+    <ClCompile Include="Common\GPUStateUtils.cpp" />
   </ItemGroup>
 </Project>

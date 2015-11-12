@@ -24,7 +24,6 @@
 class HeadlessHost : public Host
 {
 public:
-	// void StartThread() override
 	void UpdateUI() override {}
 
 	void UpdateMemView() override {}
@@ -43,7 +42,7 @@ public:
 	void BootDone() override {}
 
 	bool IsDebuggingEnabled() override { return false; }
-	bool AttemptLoadSymbolMap() override { symbolMap.Clear(); return false; }
+	bool AttemptLoadSymbolMap() override { g_symbolMap->Clear(); return false; }
 
 	bool ShouldSkipUI() override { return true; }
 

@@ -15,10 +15,11 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
-#include "../Core/MemMap.h"
+#include "Core/MemMap.h"
 
-#include "GPUState.h"
 #include "ge_constants.h"
+#include "GPU/GPU.h"
+#include "GPU/GPUState.h"
 
 void GeDescribeVertexType(u32 op, char *buffer, int len) {
 	bool through = (op & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH;
@@ -27,7 +28,7 @@ void GeDescribeVertexType(u32 op, char *buffer, int len) {
 	int nrm = (op & GE_VTYPE_NRM_MASK) >> GE_VTYPE_NRM_SHIFT;
 	int pos = (op & GE_VTYPE_POS_MASK) >> GE_VTYPE_POS_SHIFT;
 	int weight = (op & GE_VTYPE_WEIGHT_MASK) >> GE_VTYPE_WEIGHT_SHIFT;
-	int weightCount = (op & GE_VTYPE_WEIGHTCOUNT_MASK) >> GE_VTYPE_WEIGHTCOUNT_SHIFT;
+	int weightCount = ((op & GE_VTYPE_WEIGHTCOUNT_MASK) >> GE_VTYPE_WEIGHTCOUNT_SHIFT) + 1;
 	int morphCount = (op & GE_VTYPE_MORPHCOUNT_MASK) >> GE_VTYPE_MORPHCOUNT_SHIFT;
 	int idx = (op & GE_VTYPE_IDX_MASK) >> GE_VTYPE_IDX_SHIFT;
 
@@ -652,19 +653,19 @@ void GeDisassembleOp(u32 pc, u32 op, u32 prev, char *buffer, int bufsize) {
 		}
 		break;
 
-	case GE_CMD_VIEWPORTX1:
-	case GE_CMD_VIEWPORTY1:
-	case GE_CMD_VIEWPORTX2:
-	case GE_CMD_VIEWPORTY2:
-		snprintf(buffer, bufsize, "Viewport param %i: %f", cmd-GE_CMD_VIEWPORTX1, getFloat24(data));
+	case GE_CMD_VIEWPORTXSCALE:
+	case GE_CMD_VIEWPORTYSCALE:
+	case GE_CMD_VIEWPORTXCENTER:
+	case GE_CMD_VIEWPORTYCENTER:
+		snprintf(buffer, bufsize, "Viewport param %i: %f", cmd-GE_CMD_VIEWPORTXSCALE, getFloat24(data));
 		break;
-	case GE_CMD_VIEWPORTZ1:
+	case GE_CMD_VIEWPORTZSCALE:
 		{
 			float zScale = getFloat24(data) / 65535.f;
 			snprintf(buffer, bufsize, "Viewport Z scale: %f", zScale);
 		}
 		break;
-	case GE_CMD_VIEWPORTZ2:
+	case GE_CMD_VIEWPORTZCENTER:
 		{
 			float zOff = getFloat24(data) / 65535.f;
 			snprintf(buffer, bufsize, "Viewport Z pos: %f", zOff);

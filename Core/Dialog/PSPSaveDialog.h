@@ -17,8 +17,8 @@
 
 #pragma once
 
-#include "native/thread/thread.h"
-#include "native/base/mutex.h"
+#include "thread/thread.h"
+#include "base/mutex.h"
 #include "Core/Dialog/PSPDialog.h"
 #include "Core/Dialog/SavedataParam.h"
 
@@ -81,7 +81,7 @@ public:
 	void ExecuteIOAction();
 
 protected:
-	virtual bool UseAutoStatus() {
+	virtual bool UseAutoStatus() override {
 		return false;
 	}
 
@@ -90,7 +90,6 @@ private:
 	void DisplayBanner(int which);
 	void DisplaySaveList(bool canMove = true);
 	void DisplaySaveIcon();
-	void DisplayTitle(std::string name);
 	void DisplaySaveDataInfo1();
 	void DisplaySaveDataInfo2();
 	void DisplayMessage(std::string text, bool hasYesNo = false);

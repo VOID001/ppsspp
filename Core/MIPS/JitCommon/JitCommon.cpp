@@ -34,8 +34,10 @@ namespace MIPSComp {
 	ArmJit *jit;
 #elif defined(ARM64)
 	Arm64Jit *jit;
-#elif defined(_M_IX86) || defined(_M_X64) || defined(MIPS)
+#elif defined(_M_IX86) || defined(_M_X64)
 	Jit *jit;
+#elif defined(MIPS)
+	MipsJit *jit;
 #else
 	FakeJit *jit;
 #endif
@@ -94,6 +96,18 @@ std::string AddAddress(const std::string &buf, uint64_t addr) {
 }
 
 #if defined(ARM64) || defined(DISASM_ALL)
+
+static bool Arm64SymbolCallback(char *buffer, int bufsize, uint8_t *address) {
+	if (MIPSComp::jit) {
+		std::string name;
+		if (MIPSComp::jit->DescribeCodePtr(address, name)) {
+			truncate_cpy(buffer, bufsize, name.c_str());
+			return true;
+		}
+	}
+	return false;
+}
+
 std::vector<std::string> DisassembleArm64(const u8 *data, int size) {
 	std::vector<std::string> lines;
 
@@ -118,7 +132,7 @@ std::vector<std::string> DisassembleArm64(const u8 *data, int size) {
 				continue;
 			}
 		}
-		Arm64Dis((intptr_t)codePtr, inst, temp, sizeof(temp), false);
+		Arm64Dis((intptr_t)codePtr, inst, temp, sizeof(temp), false, Arm64SymbolCallback);
 		std::string buf = temp;
 		if (buf == "BKPT 1") {
 			bkpt_count++;
@@ -149,21 +163,37 @@ const char *ppsspp_resolver(struct ud*,
 	if (addr >= (uint64_t)(&currentMIPS->r[0]) && addr < (uint64_t)&currentMIPS->r[32]) {
 		*offset = addr - (uint64_t)(&currentMIPS->r[0]);
 		return "mips.r";
-	}
-	if (addr >= (uint64_t)(&currentMIPS->v[0]) && addr < (uint64_t)&currentMIPS->v[128]) {
+	} else if (addr >= (uint64_t)(&currentMIPS->v[0]) && addr < (uint64_t)&currentMIPS->v[128]) {
 		*offset = addr - (uint64_t)(&currentMIPS->v[0]);
 		return "mips.v";
-	}
-	// But these do.
-	if (MIPSComp::jit->IsInSpace((u8 *)(intptr_t)addr)) {
-		*offset = addr - (uint64_t)MIPSComp::jit->GetBasePtr();
-		return "jitcode";
-	}
-	if (MIPSComp::jit->Asm().IsInSpace((u8 *)(intptr_t)addr)) {
-		*offset = addr - (uint64_t)MIPSComp::jit->Asm().GetBasePtr();
-		return "dispatcher";
+	} else if (addr == (uint64_t)(&currentMIPS->downcount)) {
+		return "mips.downcount";
+	} else if (addr == (uint64_t)(&currentMIPS->fpcond)) {
+		return "mips.fpcond";
+	} else if (addr == (uint64_t)(&currentMIPS->temp)) {
+		return "mips.temp";
+	} else if (addr == (uint64_t)(&currentMIPS->pc)) {
+		return "mips.pc";
+	} else if (addr == (uint64_t)(&currentMIPS->hi)) {
+		return "mips.hi";
+	} else if (addr == (uint64_t)(&currentMIPS->lo)) {
+		return "mips.lo";
+	} else if (addr == (uint64_t)(&currentMIPS->fcr31)) {
+		return "mips.fcr31";
+	} else if (addr >= (uint64_t)(&currentMIPS->vfpuCtrl[0]) && addr < (uint64_t)(&currentMIPS->vfpuCtrl[16])) {
+		return "mips.vfpuCtrl";
 	}
 
+	// But these do.
+
+	// UGLY HACK because the API is terrible
+	static char buf[128];
+	std::string str;
+	if (MIPSComp::jit->DescribeCodePtr((u8 *)(uintptr_t)addr, str)) {
+		*offset = 0;
+		truncate_cpy(buf, sizeof(buf), str.c_str());
+		return buf;
+	}
 	return NULL;
 }
 

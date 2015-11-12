@@ -15,6 +15,13 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+// This allows highlighting to work.  Yay.
+#ifdef __INTELLISENSE__
+#define ARM
+#endif
+
+#include <stddef.h>
+
 #include "base/logging.h"
 #include "Common/CPUDetect.h"
 #include "Core/Config.h"
@@ -154,7 +161,7 @@ static const JitLookup jitLookup[] = {
 	{&VertexDecoder::Step_Color5551Morph, &VertexDecoderJitCache::Jit_Color5551Morph},
 };
 
-JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec) {
+JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec, int32_t *jittedSize) {
 	dec_ = &dec;
 	const u8 *start = AlignCode16();
 
@@ -220,7 +227,7 @@ JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec) {
 		MOVP2R(R4, bones);
 		MOVP2R(R5, boneMask);
 		VLD1(F_32, Q3, R5, 2, ALIGN_128);
-		for (int i = 0; i < 8; i++) {
+		for (int i = 0; i < dec.nweights; i++) {
 			VLD1(F_32, Q4, R3, 2);  // Load 128 bits even though we just want 96
 			VMUL(F_32, Q4, Q4, Q3);
 			ADD(R3, R3, 12);
@@ -302,6 +309,7 @@ JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec) {
 	INFO_LOG(HLE, "%s", temp);
 	*/
 
+	*jittedSize = GetCodePtr() - start;
 	return (JittedVertexDecoder)start;
 }
 
@@ -565,6 +573,24 @@ void VertexDecoderJitCache::Jit_TcFloat() {
 void VertexDecoderJitCache::Jit_TcU16Through() {
 	LDRH(tempReg1, srcReg, dec_->tcoff);
 	LDRH(tempReg2, srcReg, dec_->tcoff + 2);
+
+	// TODO: Cleanup.
+	MOVP2R(scratchReg, &gstate_c.vertBounds.minU);
+
+	auto updateSide = [&](ARMReg r, CCFlags cc, u32 off) {
+		LDRH(tempReg3, scratchReg, off);
+		CMP(r, tempReg3);
+		SetCC(cc);
+		STRH(r, scratchReg, off);
+		SetCC(CC_AL);
+	};
+
+	// TODO: Can this actually be fast?  Hmm, floats aren't better.
+	updateSide(tempReg1, CC_LT, offsetof(KnownVertexBounds, minU));
+	updateSide(tempReg1, CC_GT, offsetof(KnownVertexBounds, maxU));
+	updateSide(tempReg2, CC_LT, offsetof(KnownVertexBounds, minV));
+	updateSide(tempReg2, CC_GT, offsetof(KnownVertexBounds, maxV));
+
 	ORR(tempReg1, tempReg1, Operand2(tempReg2, ST_LSL, 16));
 	STR(tempReg1, dstReg, dec_->decFmt.uvoff);
 }

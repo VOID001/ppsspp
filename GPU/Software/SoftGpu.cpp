@@ -29,12 +29,12 @@
 #include "Core/MIPS/MIPS.h"
 #include "Core/Reporting.h"
 #include "gfx/gl_common.h"
-#include "gfx_es2/gl_state.h"
 #include "profiler/profiler.h"
 
 #include "GPU/Software/SoftGpu.h"
 #include "GPU/Software/TransformUnit.h"
 #include "GPU/Software/Rasterizer.h"
+#include "GPU/Common/FramebufferCommon.h"
 
 static GLuint temp_texture = 0;
 
@@ -49,9 +49,6 @@ FormatBuffer fb;
 FormatBuffer depthbuf;
 u32 clut[4096];
 
-// TODO: This one lives in GPU/GLES/Framebuffer.cpp, move it to somewhere common.
-void CenterRect(float *x, float *y, float *w, float *h,
-								float origW, float origH, float frameW, float frameH, int rotation);
 
 GLuint OpenGL_CompileProgram(const char* vertexShader, const char* fragmentShader)
 {
@@ -187,9 +184,9 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(int srcwidth, int srcheight)
 	float dstwidth = (float)PSP_CoreParameter().pixelWidth;
 	float dstheight = (float)PSP_CoreParameter().pixelHeight;
 
-	glstate.blend.disable();
-	glstate.viewport.set(0, 0, dstwidth, dstheight);
-	glstate.scissorTest.disable();
+	glDisable(GL_BLEND);
+	glViewport(0, 0, dstwidth, dstheight);
+	glDisable(GL_SCISSOR_TEST);
 
 	glBindTexture(GL_TEXTURE_2D, temp_texture);
 
@@ -248,7 +245,7 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(int srcwidth, int srcheight)
 	glUseProgram(program);
 
 	float x, y, w, h;
-	CenterRect(&x, &y, &w, &h, 480.0f, 272.0f, dstwidth, dstheight, ROTATION_LOCKED_HORIZONTAL);
+	CenterDisplayOutputRect(&x, &y, &w, &h, 480.0f, 272.0f, dstwidth, dstheight, ROTATION_LOCKED_HORIZONTAL);
 
 	x /= 0.5f * dstwidth;
 	y /= 0.5f * dstheight;
@@ -275,8 +272,8 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(int srcwidth, int srcheight)
 		{texvert_u, 1}
 	};
 
-	glstate.arrayBuffer.unbind();
-	glstate.elementArrayBuffer.unbind();
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	glVertexAttribPointer(attr_pos, 2, GL_FLOAT, GL_FALSE, 0, verts);
 	glVertexAttribPointer(attr_tex, 2, GL_FLOAT, GL_FALSE, 0, texverts);
 	glEnableVertexAttribArray(attr_pos);
@@ -681,12 +678,12 @@ void SoftGPU::ExecuteOp(u32 op, u32 diff)
 	case GE_CMD_LSC0:case GE_CMD_LSC1:case GE_CMD_LSC2:case GE_CMD_LSC3:
 		break;
 
-	case GE_CMD_VIEWPORTX1:
-	case GE_CMD_VIEWPORTY1:
-	case GE_CMD_VIEWPORTZ1:
-	case GE_CMD_VIEWPORTX2:
-	case GE_CMD_VIEWPORTY2:
-	case GE_CMD_VIEWPORTZ2:
+	case GE_CMD_VIEWPORTXSCALE:
+	case GE_CMD_VIEWPORTYSCALE:
+	case GE_CMD_VIEWPORTZSCALE:
+	case GE_CMD_VIEWPORTXCENTER:
+	case GE_CMD_VIEWPORTYCENTER:
+	case GE_CMD_VIEWPORTZCENTER:
 		break;
 
 	case GE_CMD_LIGHTENABLE0:

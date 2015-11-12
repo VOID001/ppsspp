@@ -25,7 +25,7 @@
 #include "Compare.h"
 #include "StubHost.h"
 #ifdef _WIN32
-#include "Windows/OpenGLBase.h"
+#include "Windows/GPU/WindowsGLContext.h"
 #include "WindowsHeadlessHost.h"
 #include "WindowsHeadlessHostDx9.h"
 #endif
@@ -70,6 +70,7 @@ struct InputState;
 // Temporary hacks around annoying linking errors.
 void D3D9_SwapBuffers() { }
 void GL_SwapBuffers() { }
+void GL_SwapInterval(int) { }
 void NativeUpdate(InputState &input_state) { }
 void NativeRender() { }
 void NativeResized() { }
@@ -356,7 +357,6 @@ int main(int argc, const char* argv[])
 	g_Config.bSoftwareSkinning = true;
 	g_Config.bVertexDecoderJit = true;
 	g_Config.bBlockTransferGPU = true;
-	g_Config.bSetRoundingMode = true;
 
 #ifdef _WIN32
 	InitSysDirectories();

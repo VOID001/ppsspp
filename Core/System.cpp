@@ -16,6 +16,7 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #ifdef _WIN32
+#pragma warning(disable:4091)
 #include "Common/CommonWindows.h"
 #include <ShlObj.h>
 #include <string>
@@ -23,9 +24,9 @@
 #endif
 
 #include "math/math_util.h"
-#include "native/thread/thread.h"
-#include "native/thread/threadutil.h"
-#include "native/base/mutex.h"
+#include "thread/thread.h"
+#include "thread/threadutil.h"
+#include "base/mutex.h"
 #include "util/text/utf8.h"
 
 #include "Core/MemMap.h"
@@ -34,6 +35,7 @@
 #include "Core/MIPS/MIPS.h"
 #include "Core/MIPS/MIPSAnalyst.h"
 
+#include "Debugger/SymbolMap.h"
 #include "Core/Host.h"
 #include "Core/System.h"
 #include "Core/HLE/HLE.h"
@@ -169,6 +171,8 @@ void CPU_Shutdown();
 void CPU_Init() {
 	coreState = CORE_POWERUP;
 	currentMIPS = &mipsr4k;
+	
+	g_symbolMap = new SymbolMap();
 
 	// Default memory settings
 	// Seems to be the safest place currently..
@@ -201,6 +205,14 @@ void CPU_Init() {
 		break;
 	default:
 		break;
+	}
+
+	// Here we have read the PARAM.SFO, let's see if we need any compatibility overrides.
+	// Homebrew usually has an empty discID, and even if they do have a disc id, it's not
+	// likely to collide with any commercial ones.
+	std::string discID = g_paramSFO.GetValueString("DISC_ID");
+	if (!discID.empty()) {
+		coreParameter.compat.Load(discID);
 	}
 
 	Memory::Init();
@@ -257,6 +269,9 @@ void CPU_Shutdown() {
 	loadedFile = nullptr;
 
 	delete coreParameter.mountIsoLoader;
+	delete g_symbolMap;
+	g_symbolMap = nullptr;
+
 	coreParameter.mountIsoLoader = nullptr;
 }
 
@@ -268,7 +283,6 @@ void UpdateLoadedFile(FileLoader *fileLoader) {
 
 void CPU_RunLoop() {
 	setCurrentThreadName("CPU");
-	FPU_SetFastMode();
 
 	if (CPU_NextState(CPU_THREAD_PENDING, CPU_THREAD_STARTING)) {
 		CPU_Init();
@@ -531,6 +545,8 @@ std::string GetSysDirectory(PSPDirectories directoryType) {
 		return g_Config.memStickDirectory + "PSP/SYSTEM/DUMP/";
 	case DIRECTORY_SAVESTATE:
 		return g_Config.memStickDirectory + "PSP/PPSSPP_STATE/";
+	case DIRECTORY_CACHE:
+		return g_Config.memStickDirectory + "PSP/SYSTEM/CACHE/";
 	// Just return the memory stick root if we run into some sort of problem.
 	default:
 		ERROR_LOG(FILESYS, "Unknown directory type.");
@@ -590,18 +606,19 @@ void InitSysDirectories() {
 	if (!File::Exists(g_Config.memStickDirectory)) {
 		if (!File::CreateDir(g_Config.memStickDirectory))
 			g_Config.memStickDirectory = myDocsPath;
+		INFO_LOG(COMMON, "Memstick directory not present, creating at '%s'", g_Config.memStickDirectory.c_str());
 	}
 
-	const std::string testFile = "/_writable_test.$$$";
+	const std::string testFile = g_Config.memStickDirectory + "/_writable_test.$$$";
 
 	// If any directory is read-only, fall back to the Documents directory.
 	// We're screwed anyway if we can't write to Documents, or can't detect it.
-	if (!File::CreateEmptyFile(g_Config.memStickDirectory + testFile))
+	if (!File::CreateEmptyFile(testFile))
 		g_Config.memStickDirectory = myDocsPath;
 
 	// Clean up our mess.
-	if (File::Exists(g_Config.memStickDirectory + testFile))
-		File::Delete(g_Config.memStickDirectory + testFile);
+	if (File::Exists(testFile))
+		File::Delete(testFile);
 
 	if (g_Config.currentDirectory.empty()) {
 		g_Config.currentDirectory = GetSysDirectory(DIRECTORY_GAME);

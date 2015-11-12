@@ -150,7 +150,7 @@ static const JitLookup jitLookup[] = {
 	{&VertexDecoder::Step_Color5551Morph, &VertexDecoderJitCache::Jit_Color5551Morph},
 };
 
-JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec) {
+JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec, int32_t *jittedSize) {
 	dec_ = &dec;
 	const u8 *start = this->GetCodePtr();
 
@@ -189,11 +189,10 @@ JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec) {
 
 	// Add code to convert matrices to 4x4.
 	// Later we might want to do this when the matrices are loaded instead.
-	// This is mostly proof of concept.
 	int boneCount = 0;
 	if (dec.weighttype && g_Config.bSoftwareSkinning && dec.morphcount == 1) {
 		MOVAPS(XMM4, M(&threeMasks));
-		for (int i = 0; i < 8; i++) {
+		for (int i = 0; i < dec.nweights; i++) {
 			MOVUPS(XMM0, M((gstate.boneMatrix + 12 * i)));
 			MOVUPS(XMM1, M((gstate.boneMatrix + 12 * i + 3)));
 			MOVUPS(XMM2, M((gstate.boneMatrix + 12 * i + 3 * 2)));
@@ -258,6 +257,7 @@ JittedVertexDecoder VertexDecoderJitCache::Compile(const VertexDecoder &dec) {
 
 	RET();
 
+	*jittedSize = GetCodePtr() - start;
 	return (JittedVertexDecoder)start;
 }
 
@@ -709,6 +709,22 @@ void VertexDecoderJitCache::Jit_TcFloatPrescale() {
 void VertexDecoderJitCache::Jit_TcU16Through() {
 	MOV(32, R(tempReg1), MDisp(srcReg, dec_->tcoff));
 	MOV(32, MDisp(dstReg, dec_->decFmt.uvoff), R(tempReg1));
+
+	MOV(32, R(tempReg2), R(tempReg1));
+	SHR(32, R(tempReg2), Imm8(16));
+
+	auto updateSide = [&](X64Reg r, CCFlags skipCC, u16 *value) {
+		CMP(16, R(r), M(value));
+		FixupBranch skip = J_CC(skipCC);
+		MOV(16, M(value), R(r));
+		SetJumpTarget(skip);
+	};
+
+	// TODO: Can this actually be fast?  Hmm, floats aren't better.
+	updateSide(tempReg1, CC_GE, &gstate_c.vertBounds.minU);
+	updateSide(tempReg1, CC_LE, &gstate_c.vertBounds.maxU);
+	updateSide(tempReg2, CC_GE, &gstate_c.vertBounds.minV);
+	updateSide(tempReg2, CC_LE, &gstate_c.vertBounds.maxV);
 }
 
 void VertexDecoderJitCache::Jit_TcU16ThroughToFloat() {

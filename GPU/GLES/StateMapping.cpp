@@ -21,7 +21,6 @@
 
 
 #include "StateMapping.h"
-#include "gfx_es2/gl_state.h"
 #include "profiler/profiler.h"
 
 #include "GPU/Math3D.h"
@@ -31,6 +30,7 @@
 #include "Core/Config.h"
 #include "Core/Reporting.h"
 #include "GPU/GLES/GLES_GPU.h"
+#include "GPU/GLES/GLStateCache.h"
 #include "GPU/GLES/ShaderManager.h"
 #include "GPU/GLES/TextureCache.h"
 #include "GPU/GLES/Framebuffer.h"
@@ -89,8 +89,8 @@ static const GLushort eqLookup[] = {
 };
 
 static const GLushort cullingMode[] = {
-	GL_BACK,
 	GL_FRONT,
+	GL_BACK,
 };
 
 static const GLushort ztests[] = {
@@ -132,7 +132,7 @@ static const GLushort logicOps[] = {
 
 static GLenum toDualSource(GLenum blendfunc) {
 	switch (blendfunc) {
-#ifndef USING_GLES2
+#if !defined(USING_GLES2)   // TODO: Remove when we have better headers
 	case GL_SRC_ALPHA:
 		return GL_SRC1_ALPHA;
 	case GL_ONE_MINUS_SRC_ALPHA:
@@ -168,7 +168,7 @@ static inline bool blendColorSimilar(const Vec3f &a, const Vec3f &b, float margi
 }
 
 bool TransformDrawEngine::ApplyShaderBlending() {
-	if (gl_extensions.ANY_shader_framebuffer_fetch) {
+	if (gstate_c.featureFlags & GPU_SUPPORTS_ANY_FRAMEBUFFER_FETCH) {
 		return true;
 	}
 
@@ -190,19 +190,14 @@ bool TransformDrawEngine::ApplyShaderBlending() {
 		return false;
 	}
 
-	framebufferManager_->BindFramebufferColor(GL_TEXTURE1, NULL);
-	glActiveTexture(GL_TEXTURE1);
-	// If we are rendering at a higher resolution, linear is probably best for the dest color.
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glActiveTexture(GL_TEXTURE0);
-	fboTexBound_ = true;
+	fboTexNeedBind_ = true;
 
 	shaderManager_->DirtyUniform(DIRTY_SHADERBLEND);
 	return true;
 }
 
 inline void TransformDrawEngine::ResetShaderBlending() {
+	// Wait - what does this have to do with FBOs?
 	if (fboTexBound_) {
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, 0);
@@ -211,6 +206,7 @@ inline void TransformDrawEngine::ResetShaderBlending() {
 	}
 }
 
+// Try to simulate some common logic ops.
 void TransformDrawEngine::ApplyStencilReplaceAndLogicOp(ReplaceAlphaType replaceAlphaWithStencil) {
 	StencilValueType stencilType = STENCIL_VALUE_KEEP;
 	if (replaceAlphaWithStencil == REPLACE_ALPHA_YES) {
@@ -221,59 +217,60 @@ void TransformDrawEngine::ApplyStencilReplaceAndLogicOp(ReplaceAlphaType replace
 	GLenum srcBlend = GL_ONE;
 	GLenum dstBlend = GL_ZERO;
 	GLenum blendOp = GL_FUNC_ADD;
-#if defined(USING_GLES2)
-	if (gstate.isLogicOpEnabled()) {
-		switch (gstate.getLogicOp())
-		{
-		case GE_LOGIC_CLEAR:
-			srcBlend = GL_ZERO;
-			break;
-		case GE_LOGIC_AND:
-		case GE_LOGIC_AND_REVERSE:
-			WARN_LOG_REPORT_ONCE(d3dLogicOpAnd, G3D, "Unsupported AND logic op: %x", gstate.getLogicOp());
-			break;
-		case GE_LOGIC_COPY:
-			// This is the same as off.
-			break;
-		case GE_LOGIC_COPY_INVERTED:
-			// Handled in the shader.
-			break;
-		case GE_LOGIC_AND_INVERTED:
-		case GE_LOGIC_NOR:
-		case GE_LOGIC_NAND:
-		case GE_LOGIC_EQUIV:
-			// Handled in the shader.
-			WARN_LOG_REPORT_ONCE(d3dLogicOpAndInverted, G3D, "Attempted invert for logic op: %x", gstate.getLogicOp());
-			break;
-		case GE_LOGIC_INVERTED:
-			srcBlend = GL_ONE;
-			dstBlend = GL_ONE;
-			blendOp = GL_FUNC_SUBTRACT;
-			WARN_LOG_REPORT_ONCE(d3dLogicOpInverted, G3D, "Attempted inverse for logic op: %x", gstate.getLogicOp());
-			break;
-		case GE_LOGIC_NOOP:
-			srcBlend = GL_ZERO;
-			dstBlend = GL_ONE;
-			break;
-		case GE_LOGIC_XOR:
-			WARN_LOG_REPORT_ONCE(d3dLogicOpOrXor, G3D, "Unsupported XOR logic op: %x", gstate.getLogicOp());
-			break;
-		case GE_LOGIC_OR:
-		case GE_LOGIC_OR_INVERTED:
-			// Inverted in shader.
-			dstBlend = GL_ONE;
-			WARN_LOG_REPORT_ONCE(d3dLogicOpOr, G3D, "Attempted or for logic op: %x", gstate.getLogicOp());
-			break;
-		case GE_LOGIC_OR_REVERSE:
-			WARN_LOG_REPORT_ONCE(d3dLogicOpOrReverse, G3D, "Unsupported OR REVERSE logic op: %x", gstate.getLogicOp());
-			break;
-		case GE_LOGIC_SET:
-			dstBlend = GL_ONE;
-			WARN_LOG_REPORT_ONCE(d3dLogicOpSet, G3D, "Attempted set for logic op: %x", gstate.getLogicOp());
-			break;
+
+	if (!gstate_c.Supports(GPU_SUPPORTS_LOGIC_OP)) {
+		if (gstate.isLogicOpEnabled()) {
+			switch (gstate.getLogicOp())
+			{
+			case GE_LOGIC_CLEAR:
+				srcBlend = GL_ZERO;
+				break;
+			case GE_LOGIC_AND:
+			case GE_LOGIC_AND_REVERSE:
+				WARN_LOG_REPORT_ONCE(d3dLogicOpAnd, G3D, "Unsupported AND logic op: %x", gstate.getLogicOp());
+				break;
+			case GE_LOGIC_COPY:
+				// This is the same as off.
+				break;
+			case GE_LOGIC_COPY_INVERTED:
+				// Handled in the shader.
+				break;
+			case GE_LOGIC_AND_INVERTED:
+			case GE_LOGIC_NOR:
+			case GE_LOGIC_NAND:
+			case GE_LOGIC_EQUIV:
+				// Handled in the shader.
+				WARN_LOG_REPORT_ONCE(d3dLogicOpAndInverted, G3D, "Attempted invert for logic op: %x", gstate.getLogicOp());
+				break;
+			case GE_LOGIC_INVERTED:
+				srcBlend = GL_ONE;
+				dstBlend = GL_ONE;
+				blendOp = GL_FUNC_SUBTRACT;
+				WARN_LOG_REPORT_ONCE(d3dLogicOpInverted, G3D, "Attempted inverse for logic op: %x", gstate.getLogicOp());
+				break;
+			case GE_LOGIC_NOOP:
+				srcBlend = GL_ZERO;
+				dstBlend = GL_ONE;
+				break;
+			case GE_LOGIC_XOR:
+				WARN_LOG_REPORT_ONCE(d3dLogicOpOrXor, G3D, "Unsupported XOR logic op: %x", gstate.getLogicOp());
+				break;
+			case GE_LOGIC_OR:
+			case GE_LOGIC_OR_INVERTED:
+				// Inverted in shader.
+				dstBlend = GL_ONE;
+				WARN_LOG_REPORT_ONCE(d3dLogicOpOr, G3D, "Attempted or for logic op: %x", gstate.getLogicOp());
+				break;
+			case GE_LOGIC_OR_REVERSE:
+				WARN_LOG_REPORT_ONCE(d3dLogicOpOrReverse, G3D, "Unsupported OR REVERSE logic op: %x", gstate.getLogicOp());
+				break;
+			case GE_LOGIC_SET:
+				dstBlend = GL_ONE;
+				WARN_LOG_REPORT_ONCE(d3dLogicOpSet, G3D, "Attempted set for logic op: %x", gstate.getLogicOp());
+				break;
+			}
 		}
 	}
-#endif
 
 	// We're not blending, but we may still want to blend for stencil.
 	// This is only useful for INCR/DECR/INVERT.  Others can write directly.
@@ -313,6 +310,8 @@ void TransformDrawEngine::ApplyStencilReplaceAndLogicOp(ReplaceAlphaType replace
 	}
 }
 
+// Called even if AlphaBlendEnable == false - it also deals with stencil-related blend state.
+
 void TransformDrawEngine::ApplyBlendState() {
 	// Blending is a bit complex to emulate.  This is due to several reasons:
 	//
@@ -325,7 +324,7 @@ void TransformDrawEngine::ApplyBlendState() {
 	// If we can't apply blending, we make a copy of the framebuffer and do it manually.
 	gstate_c.allowShaderBlend = !g_Config.bDisableSlowFramebufEffects;
 
-	ReplaceBlendType replaceBlend = ReplaceBlendWithShader();
+	ReplaceBlendType replaceBlend = ReplaceBlendWithShader(gstate_c.allowShaderBlend, gstate.FrameBufFormat());
 	ReplaceAlphaType replaceAlphaWithStencil = ReplaceAlphaWithStencil(replaceBlend);
 	bool usePreSrc = false;
 
@@ -360,9 +359,12 @@ void TransformDrawEngine::ApplyBlendState() {
 	glstate.blend.enable();
 	ResetShaderBlending();
 
-	GEBlendMode blendFuncEq = gstate.getBlendEq();
-	int blendFuncA  = gstate.getBlendFuncA();
-	int blendFuncB  = gstate.getBlendFuncB();
+	const GEBlendMode blendFuncEq = gstate.getBlendEq();
+	int blendFuncA = gstate.getBlendFuncA();
+	int blendFuncB = gstate.getBlendFuncB();
+	const u32 fixA = gstate.getFixA();
+	const u32 fixB = gstate.getFixB();
+
 	if (blendFuncA > GE_SRCBLEND_FIXA)
 		blendFuncA = GE_SRCBLEND_FIXA;
 	if (blendFuncB > GE_DSTBLEND_FIXB)
@@ -400,9 +402,24 @@ void TransformDrawEngine::ApplyBlendState() {
 
 	// Shortcut by using GL_ONE where possible, no need to set blendcolor
 	bool approxFuncA = false;
-	GLuint glBlendFuncA = blendFuncA == GE_SRCBLEND_FIXA ? blendColor2Func(gstate.getFixA(), approxFuncA) : aLookup[blendFuncA];
+	GLuint glBlendFuncA = blendFuncA == GE_SRCBLEND_FIXA ? blendColor2Func(fixA, approxFuncA) : aLookup[blendFuncA];
 	bool approxFuncB = false;
-	GLuint glBlendFuncB = blendFuncB == GE_DSTBLEND_FIXB ? blendColor2Func(gstate.getFixB(), approxFuncB) : bLookup[blendFuncB];
+	GLuint glBlendFuncB = blendFuncB == GE_DSTBLEND_FIXB ? blendColor2Func(fixB, approxFuncB) : bLookup[blendFuncB];
+
+	if (gstate.FrameBufFormat() == GE_FORMAT_565) {
+		if (blendFuncA == GE_SRCBLEND_DSTALPHA || blendFuncA == GE_SRCBLEND_DOUBLEDSTALPHA) {
+			glBlendFuncA = GL_ZERO;
+		}
+		if (blendFuncA == GE_SRCBLEND_INVDSTALPHA || blendFuncA == GE_SRCBLEND_DOUBLEINVDSTALPHA) {
+			glBlendFuncA = GL_ONE;
+		}
+		if (blendFuncB == GE_DSTBLEND_DSTALPHA || blendFuncB == GE_DSTBLEND_DOUBLEDSTALPHA) {
+			glBlendFuncB = GL_ZERO;
+		}
+		if (blendFuncB == GE_DSTBLEND_INVDSTALPHA || blendFuncB == GE_DSTBLEND_DOUBLEINVDSTALPHA) {
+			glBlendFuncB = GL_ONE;
+		}
+	}
 
 	if (usePreSrc) {
 		glBlendFuncA = GL_ONE;
@@ -412,7 +429,7 @@ void TransformDrawEngine::ApplyBlendState() {
 		}
 	}
 
-	if (replaceAlphaWithStencil == REPLACE_ALPHA_DUALSOURCE) {
+	if (replaceAlphaWithStencil == REPLACE_ALPHA_DUALSOURCE && gstate_c.Supports(GPU_SUPPORTS_DUALSOURCE_BLEND)) {
 		glBlendFuncA = toDualSource(glBlendFuncA);
 		glBlendFuncB = toDualSource(glBlendFuncB);
 	}
@@ -429,49 +446,49 @@ void TransformDrawEngine::ApplyBlendState() {
 	};
 
 	if (blendFuncA == GE_SRCBLEND_FIXA || blendFuncB == GE_DSTBLEND_FIXB) {
-		const Vec3f fixA = Vec3f::FromRGB(gstate.getFixA());
-		const Vec3f fixB = Vec3f::FromRGB(gstate.getFixB());
+		const Vec3f fixAVec = Vec3f::FromRGB(fixA);
+		const Vec3f fixBVec = Vec3f::FromRGB(fixB);
 		if (glBlendFuncA == GL_INVALID_ENUM && glBlendFuncB != GL_INVALID_ENUM) {
 			// Can use blendcolor trivially.
-			setBlendColorv(fixA);
+			setBlendColorv(fixAVec);
 			glBlendFuncA = GL_CONSTANT_COLOR;
 		} else if (glBlendFuncA != GL_INVALID_ENUM && glBlendFuncB == GL_INVALID_ENUM) {
 			// Can use blendcolor trivially.
-			setBlendColorv(fixB);
+			setBlendColorv(fixBVec);
 			glBlendFuncB = GL_CONSTANT_COLOR;
 		} else if (glBlendFuncA == GL_INVALID_ENUM && glBlendFuncB == GL_INVALID_ENUM) {
-			if (blendColorSimilar(fixA, Vec3f::AssignToAll(1.0f) - fixB)) {
+			if (blendColorSimilar(fixAVec, Vec3f::AssignToAll(1.0f) - fixBVec)) {
 				glBlendFuncA = GL_CONSTANT_COLOR;
 				glBlendFuncB = GL_ONE_MINUS_CONSTANT_COLOR;
-				setBlendColorv(fixA);
-			} else if (blendColorSimilar(fixA, fixB)) {
+				setBlendColorv(fixAVec);
+			} else if (blendColorSimilar(fixAVec, fixBVec)) {
 				glBlendFuncA = GL_CONSTANT_COLOR;
 				glBlendFuncB = GL_CONSTANT_COLOR;
-				setBlendColorv(fixA);
+				setBlendColorv(fixAVec);
 			} else {
-				DEBUG_LOG(G3D, "ERROR INVALID blendcolorstate: FixA=%06x FixB=%06x FuncA=%i FuncB=%i", gstate.getFixA(), gstate.getFixB(), gstate.getBlendFuncA(), gstate.getBlendFuncB());
+				DEBUG_LOG(G3D, "ERROR INVALID blendcolorstate: FixA=%06x FixB=%06x FuncA=%i FuncB=%i", fixA, fixB, blendFuncA, blendFuncB);
 				// Let's approximate, at least.  Close is better than totally off.
-				const bool nearZeroA = blendColorSimilar(fixA, Vec3f::AssignToAll(0.0f), 0.25f);
-				const bool nearZeroB = blendColorSimilar(fixB, Vec3f::AssignToAll(0.0f), 0.25f);
-				if (nearZeroA || blendColorSimilar(fixA, Vec3f::AssignToAll(1.0f), 0.25f)) {
+				const bool nearZeroA = blendColorSimilar(fixAVec, Vec3f::AssignToAll(0.0f), 0.25f);
+				const bool nearZeroB = blendColorSimilar(fixBVec, Vec3f::AssignToAll(0.0f), 0.25f);
+				if (nearZeroA || blendColorSimilar(fixAVec, Vec3f::AssignToAll(1.0f), 0.25f)) {
 					glBlendFuncA = nearZeroA ? GL_ZERO : GL_ONE;
 					glBlendFuncB = GL_CONSTANT_COLOR;
-					setBlendColorv(fixB);
+					setBlendColorv(fixBVec);
 				} else {
 					// We need to pick something.  Let's go with A as the fixed color.
 					glBlendFuncA = GL_CONSTANT_COLOR;
 					glBlendFuncB = nearZeroB ? GL_ZERO : GL_ONE;
-					setBlendColorv(fixA);
+					setBlendColorv(fixAVec);
 				}
 			}
 		} else {
 			// We optimized both, but that's probably not necessary, so let's pick one to be constant.
 			if (blendFuncA == GE_SRCBLEND_FIXA && !usePreSrc && approxFuncA) {
 				glBlendFuncA = GL_CONSTANT_COLOR;
-				setBlendColorv(fixA);
+				setBlendColorv(fixAVec);
 			} else if (approxFuncB) {
 				glBlendFuncB = GL_CONSTANT_COLOR;
-				setBlendColorv(fixB);
+				setBlendColorv(fixBVec);
 			} else {
 				defaultBlendColor();
 			}
@@ -561,7 +578,7 @@ void TransformDrawEngine::ApplyBlendState() {
 		glstate.blendFuncSeparate.set(glBlendFuncA, glBlendFuncB, GL_ZERO, GL_ONE);
 	}
 
-	if (gl_extensions.EXT_blend_minmax || gl_extensions.GLES3) {
+	if (gstate_c.Supports(GPU_SUPPORTS_BLEND_MINMAX)) {
 		glstate.blendEquationSeparate.set(eqLookup[blendFuncEq], alphaEq);
 	} else {
 		glstate.blendEquationSeparate.set(eqLookupNoMinMax[blendFuncEq], alphaEq);
@@ -590,6 +607,7 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 
 	bool alwaysDepthWrite = g_Config.bAlwaysDepthWrite;
 	bool enableStencilTest = !g_Config.bDisableStencilTest;
+	bool useBufferedRendering = g_Config.iRenderingMode != FB_NON_BUFFERED_MODE;
 
 	// Dither
 	if (gstate.isDitherEnabled()) {
@@ -599,9 +617,11 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 		glstate.dither.disable();
 
 	if (gstate.isModeClear()) {
-#if !defined(USING_GLES2)
-		// Logic Ops
-		glstate.colorLogicOp.disable();
+#ifndef USING_GLES2
+		if (gstate_c.Supports(GPU_SUPPORTS_LOGIC_OP)) {
+			// Logic Ops
+			glstate.colorLogicOp.disable();
+		}
 #endif
 		// Culling
 		glstate.cullFace.disable();
@@ -633,20 +653,23 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 			glstate.stencilTest.disable();
 		}
 	} else {
-#if !defined(USING_GLES2)
-		// Logic Ops
-		if (gstate.isLogicOpEnabled() && gstate.getLogicOp() != GE_LOGIC_COPY) {
-			glstate.colorLogicOp.enable();
-			glstate.logicOp.set(logicOps[gstate.getLogicOp()]);
-		} else {
-			glstate.colorLogicOp.disable();
+#ifndef USING_GLES2
+		if (gstate_c.Supports(GPU_SUPPORTS_LOGIC_OP)) {
+			// TODO: Make this dynamic
+			// Logic Ops
+			if (gstate.isLogicOpEnabled() && gstate.getLogicOp() != GE_LOGIC_COPY) {
+				glstate.colorLogicOp.enable();
+				glstate.logicOp.set(logicOps[gstate.getLogicOp()]);
+			} else {
+				glstate.colorLogicOp.disable();
+			}
 		}
 #endif
 		// Set cull
 		bool cullEnabled = !gstate.isModeThrough() && prim != GE_PRIM_RECTANGLES && gstate.isCullEnabled();
 		if (cullEnabled) {
 			glstate.cullFace.enable();
-			glstate.cullFaceMode.set(cullingMode[gstate.getCullMode()]);
+			glstate.cullFaceMode.set(cullingMode[gstate.getCullMode() ^ !useBufferedRendering]);
 		} else {
 			glstate.cullFace.disable();
 		}
@@ -658,6 +681,13 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 			glstate.depthWrite.set(gstate.isDepthWriteEnabled() || alwaysDepthWrite ? GL_TRUE : GL_FALSE);
 			if (gstate.isDepthWriteEnabled() || alwaysDepthWrite) {
 				framebufferManager_->SetDepthUpdated();
+			}
+
+			if (gstate.isModeThrough()) {
+				GEComparison ztest = gstate.getDepthTestFunction();
+				if (ztest == GE_COMP_EQUAL || ztest == GE_COMP_NOTEQUAL || ztest == GE_COMP_LEQUAL || ztest == GE_COMP_GEQUAL) {
+					DEBUG_LOG_REPORT_ONCE(ztestequal, G3D, "Depth test requiring depth equality in throughmode: %d", ztest);
+				}
 			}
 		} else {
 			glstate.depthTest.disable();
@@ -720,11 +750,11 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 
 	float renderWidthFactor, renderHeightFactor;
 	float renderWidth, renderHeight;
-	float renderX, renderY;
-	bool useBufferedRendering = g_Config.iRenderingMode != FB_NON_BUFFERED_MODE;
+	float renderX = 0.0f, renderY = 0.0f;
+	float displayOffsetX, displayOffsetY;
 	if (useBufferedRendering) {
-		renderX = 0.0f;
-		renderY = 0.0f;
+		displayOffsetX = 0.0f;
+		displayOffsetY = 0.0f;
 		renderWidth = framebufferManager_->GetRenderWidth();
 		renderHeight = framebufferManager_->GetRenderHeight();
 		renderWidthFactor = (float)renderWidth / framebufferManager_->GetTargetBufferWidth();
@@ -732,12 +762,12 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 	} else {
 		float pixelW = PSP_CoreParameter().pixelWidth;
 		float pixelH = PSP_CoreParameter().pixelHeight;
-		CenterRect(&renderX, &renderY, &renderWidth, &renderHeight, 480, 272, pixelW, pixelH, ROTATION_LOCKED_HORIZONTAL);
+		CenterDisplayOutputRect(&displayOffsetX, &displayOffsetY, &renderWidth, &renderHeight, 480, 272, pixelW, pixelH, ROTATION_LOCKED_HORIZONTAL);
 		renderWidthFactor = renderWidth / 480.0f;
 		renderHeightFactor = renderHeight / 272.0f;
 	}
 
-	renderX += gstate_c.cutRTOffsetX * renderWidthFactor;
+	renderX += gstate_c.curRTOffsetX * renderWidthFactor;
 
 	// Scissor
 	int scissorX1 = gstate.getScissorX1();
@@ -746,80 +776,92 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 	int scissorY2 = gstate.getScissorY2() + 1;
 
 	// This is a bit of a hack as the render buffer isn't always that size
-	if (scissorX1 == 0 && scissorY1 == 0 
+	// We always scissor on non-buffered so that clears don't spill outside the frame.
+	if (useBufferedRendering && scissorX1 == 0 && scissorY1 == 0
 		&& scissorX2 >= (int) gstate_c.curRTWidth
 		&& scissorY2 >= (int) gstate_c.curRTHeight) {
 		glstate.scissorTest.disable();
 	} else {
 		glstate.scissorTest.enable();
-		glstate.scissorRect.set(
-			renderX + scissorX1 * renderWidthFactor,
-			renderY + renderHeight - (scissorY2 * renderHeightFactor),
-			(scissorX2 - scissorX1) * renderWidthFactor,
-			(scissorY2 - scissorY1) * renderHeightFactor);
+
+		// Buffers are now in the GL coordinate system, so no flipping needed.
+		if (useBufferedRendering) {
+			glstate.scissorRect.set(
+				renderX + displayOffsetX + scissorX1 * renderWidthFactor,
+				renderY + displayOffsetY + scissorY1 * renderHeightFactor,
+				(scissorX2 - scissorX1) * renderWidthFactor,
+				(scissorY2 - scissorY1) * renderHeightFactor);
+		} else {
+			glstate.scissorRect.set(
+				renderX + displayOffsetX + scissorX1 * renderWidthFactor,
+				renderY + displayOffsetY + renderHeight - (scissorY2 * renderHeightFactor),
+				(scissorX2 - scissorX1) * renderWidthFactor,
+				(scissorY2 - scissorY1) * renderHeightFactor);
+		}
 	}
 
-	/*
-	int regionX1 = gstate.region1 & 0x3FF;
-	int regionY1 = (gstate.region1 >> 10) & 0x3FF;
-	int regionX2 = (gstate.region2 & 0x3FF) + 1;
-	int regionY2 = ((gstate.region2 >> 10) & 0x3FF) + 1;
-	*/
-	int regionX1 = 0;
-	int regionY1 = 0;
-	int regionX2 = gstate_c.curRTWidth;
-	int regionY2 = gstate_c.curRTHeight;
+	int curRTWidth = gstate_c.curRTWidth;
+	int curRTHeight = gstate_c.curRTHeight;
 
 	float offsetX = gstate.getOffsetX();
 	float offsetY = gstate.getOffsetY();
 
 	if (throughmode) {
-		// If the buffer is too large, offset the viewport to the top.
-		renderY += renderHeight - framebufferManager_->GetTargetHeight() * renderHeightFactor;
-
 		// No viewport transform here. Let's experiment with using region.
-		glstate.viewport.set(
-			renderX + (0 + regionX1) * renderWidthFactor, 
-			renderY + (0 - regionY1) * renderHeightFactor,
-			(regionX2 - regionX1) * renderWidthFactor,
-			(regionY2 - regionY1) * renderHeightFactor);
+		if (useBufferedRendering) {
+			// No flip needed
+			glstate.viewport.set(
+				renderX + displayOffsetX,
+				renderY + displayOffsetY,
+				curRTWidth * renderWidthFactor,
+				curRTHeight * renderHeightFactor);
+		} else {
+			renderY += renderHeight - framebufferManager_->GetTargetHeight() * renderHeightFactor;
+			glstate.viewport.set(
+				renderX + displayOffsetX,
+				renderY + displayOffsetY,
+				curRTWidth * renderWidthFactor,
+				curRTHeight * renderHeightFactor);
+		}
 		glstate.depthRange.set(0.0f, 1.0f);
 	} else {
 		// These we can turn into a glViewport call, offset by offsetX and offsetY. Math after.
-		float vpXScale = getFloat24(gstate.viewportx1);
-		float vpXCenter = getFloat24(gstate.viewportx2);
-		float vpYScale = getFloat24(gstate.viewporty1);
-		float vpYCenter = getFloat24(gstate.viewporty2);
+		float vpXScale = gstate.getViewportXScale();
+		float vpXCenter = gstate.getViewportXCenter();
+		float vpYScale = gstate.getViewportYScale();
+		float vpYCenter = gstate.getViewportYCenter();
 
 		// The viewport transform appears to go like this:
 		// Xscreen = -offsetX + vpXCenter + vpXScale * Xview
 		// Yscreen = -offsetY + vpYCenter + vpYScale * Yview
 		// Zscreen = vpZCenter + vpZScale * Zview
 
+		// The viewport is normally centered at 2048,2048 but can also be centered at other locations.
+		// Offset is subtracted from the viewport center and is also set to values in those ranges, and is set so that the viewport will cover
+		// the desired screen area ([0-480)x[0-272)), so 1808,1912.
+
 		// This means that to get the analogue glViewport we must:
 		float vpX0 = vpXCenter - offsetX - fabsf(vpXScale);
-		float vpY0 = vpYCenter - offsetY + fabsf(vpYScale);   // Need to account for sign of Y
+		float vpY0 = vpYCenter - offsetY - fabsf(vpYScale);   // Need to account for sign of Y
 		gstate_c.vpWidth = vpXScale * 2.0f;
-		gstate_c.vpHeight = -vpYScale * 2.0f;
+		gstate_c.vpHeight = vpYScale * 2.0f;
 
 		float vpWidth = fabsf(gstate_c.vpWidth);
 		float vpHeight = fabsf(gstate_c.vpHeight);
 
+		// This multiplication should probably be done after viewport clipping. Would let us very slightly simplify the clipping logic?
 		vpX0 *= renderWidthFactor;
 		vpY0 *= renderHeightFactor;
 		vpWidth *= renderWidthFactor;
 		vpHeight *= renderHeightFactor;
 
-		// Flip vpY0 to match the OpenGL coordinate system.
-		vpY0 = renderHeight - vpY0;
-
 		// We used to apply the viewport here via glstate, but there are limits which vary by driver.
 		// This may mean some games won't work, or at least won't work at higher render resolutions.
 		// So we apply it in the shader instead.
 		float left = renderX + vpX0;
-		float bottom = renderY + vpY0;
+		float top = renderY + vpY0;
 		float right = left + vpWidth;
-		float top = bottom + vpHeight;
+		float bottom = top + vpHeight;
 
 		float wScale = 1.0f;
 		float xOffset = 0.0f;
@@ -840,23 +882,22 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 			xOffset = drift / (right - left);
 		}
 
-		if (bottom < 0.0f || top > renderHeight) {
-			float overageBottom = std::max(-bottom, 0.0f);
-			float overageTop = std::max(top - renderHeight, 0.0f);
+		if (top < 0.0f || bottom > renderHeight) {
+			float overageTop = std::max(-top, 0.0f);
+			float overageBottom = std::max(bottom - renderHeight, 0.0f);
 			// Our center drifted by the difference in overages.
-			float drift = overageTop - overageBottom;
+			float drift = overageBottom - overageTop;
 
-			bottom += overageBottom;
-			top -= overageTop;
+			top += overageTop;
+			bottom -= overageBottom;
 
-			hScale = vpHeight / (top - bottom);
-			yOffset = drift / (top - bottom);
+			hScale = vpHeight / (bottom - top);
+			yOffset = drift / (bottom - top);
 		}
 
 		bool scaleChanged = gstate_c.vpWidthScale != wScale || gstate_c.vpHeightScale != hScale;
 		bool offsetChanged = gstate_c.vpXOffset != xOffset || gstate_c.vpYOffset != yOffset;
-		if (scaleChanged || offsetChanged)
-		{
+		if (scaleChanged || offsetChanged) {
 			gstate_c.vpWidthScale = wScale;
 			gstate_c.vpHeightScale = hScale;
 			gstate_c.vpXOffset = xOffset;
@@ -864,23 +905,27 @@ void TransformDrawEngine::ApplyDrawState(int prim) {
 			shaderManager_->DirtyUniform(DIRTY_PROJMATRIX);
 		}
 
-		glstate.viewport.set(left, bottom, right - left, top - bottom);
+		if (useBufferedRendering) {
+			glstate.viewport.set(left + displayOffsetX, displayOffsetY + top, right - left, bottom - top);
+		} else {
+			glstate.viewport.set(left + displayOffsetX, displayOffsetY + (renderHeight - bottom), right - left, bottom - top);
+		}
 
-		float zScale = getFloat24(gstate.viewportz1) * (1.0f / 65535.0f);
-		float zOff = getFloat24(gstate.viewportz2) * (1.0f / 65535.0f);
-		float depthRangeMin = zOff - zScale;
-		float depthRangeMax = zOff + zScale;
-		glstate.depthRange.set(depthRangeMin, depthRangeMax);
+		float zScale = gstate.getViewportZScale();
+		float zCenter = gstate.getViewportZCenter();
+		float depthRangeMin = zCenter - zScale;
+		float depthRangeMax = zCenter + zScale;
+		glstate.depthRange.set(depthRangeMin * (1.0f / 65535.0f), depthRangeMax * (1.0f / 65535.0f));
 
 #ifndef MOBILE_DEVICE
-		float minz = gstate.getDepthRangeMin() * (1.0f / 65535.0f);
-		float maxz = gstate.getDepthRangeMax() * (1.0f / 65535.0f);
+		float minz = gstate.getDepthRangeMin();
+		float maxz = gstate.getDepthRangeMax();
 		if ((minz > depthRangeMin && minz > depthRangeMax) || (maxz < depthRangeMin && maxz < depthRangeMax)) {
-			WARN_LOG_REPORT_ONCE(minmaxz, G3D, "Unsupported depth range test - depth range: %f-%f, test: %f-%f", depthRangeMin, depthRangeMax, minz, maxz);
+			WARN_LOG_REPORT_ONCE(minmaxz, G3D, "Unsupported depth range in test - depth range: %f-%f, test: %f-%f", depthRangeMin, depthRangeMax, minz, maxz);
 		} else if ((gstate.clipEnable & 1) == 0) {
 			// TODO: Need to test whether clipEnable should even affect depth or not.
 			if ((minz < depthRangeMin && minz < depthRangeMax) || (maxz > depthRangeMin && maxz > depthRangeMax)) {
-				WARN_LOG_REPORT_ONCE(znoclip, G3D, "Unsupported depth range test without clipping - depth range: %f-%f, test: %f-%f", depthRangeMin, depthRangeMax, minz, maxz);
+				WARN_LOG_REPORT_ONCE(znoclip, G3D, "Unsupported depth range in test without clipping - depth range: %f-%f, test: %f-%f", depthRangeMin, depthRangeMax, minz, maxz);
 			}
 		}
 #endif
@@ -893,6 +938,22 @@ void TransformDrawEngine::ApplyDrawStateLate() {
 	if (!gstate.isModeClear()) {
 		if (gstate.isAlphaTestEnabled() || gstate.isColorTestEnabled()) {
 			fragmentTestCache_->BindTestTexture(GL_TEXTURE2);
+		}
+
+		textureCache_->ApplyTexture();
+
+		if (fboTexNeedBind_) {
+			// Note that this is positions, not UVs, that we need the copy from.
+			framebufferManager_->BindFramebufferColor(GL_TEXTURE1, gstate.getFrameBufRawAddress(), nullptr, BINDFBCOLOR_MAY_COPY);
+			framebufferManager_->RebindFramebuffer();
+
+			glActiveTexture(GL_TEXTURE1);
+			// If we are rendering at a higher resolution, linear is probably best for the dest color.
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glActiveTexture(GL_TEXTURE0);
+			fboTexBound_ = true;
+			fboTexNeedBind_ = false;
 		}
 	}
 }
